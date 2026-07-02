@@ -562,14 +562,22 @@ export default function App() {
   const [leftAngle, setLeftAngle] = useState(0);
   const [rightAngle, setRightAngle] = useState(0);
 
-  // Responsive scale
-  const [scale, setScale] = useState(1);
+  // Responsive scale — on narrow portrait screens the cassette rotates
+  // 90° to use the screen's full height instead of floating tiny and wide.
+  const [viewport, setViewport] = useState({ w: window.innerWidth, h: window.innerHeight });
   useEffect(() => {
-    const update = () => setScale(Math.min(1, (window.innerWidth - 32) / 1080));
+    const update = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
     update();
     window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);
   }, []);
+
+  const PAD = 32;
+  const isMobile = Math.min(viewport.w, viewport.h) < 768;
+  const isMobilePortrait = isMobile && viewport.h > viewport.w;
+  const scale = isMobilePortrait
+    ? Math.min((viewport.w - PAD) / 662, (viewport.h - PAD) / 1080)
+    : Math.min(1, (viewport.w - PAD) / 1080);
 
   const handleLeftRotate = useCallback((delta: number) => {
     audio.seek(delta * 0.07);
@@ -600,17 +608,26 @@ export default function App() {
         boxSizing: 'border-box',
       }}
     >
-      {/* ── Scaled cassette wrapper ── */}
-      <div style={{ width: CW * scale, height: CH * scale, position: 'relative', flexShrink: 0 }}>
+      {/* ── Scaled cassette wrapper (rotates 90° to fill narrow portrait screens) ── */}
+      <div
+        style={{
+          width: isMobilePortrait ? CH * scale : CW * scale,
+          height: isMobilePortrait ? CW * scale : CH * scale,
+          position: 'relative',
+          flexShrink: 0,
+        }}
+      >
         <div
           style={{
             width: CW,
             height: CH,
-            transform: `scale(${scale})`,
-            transformOrigin: 'top left',
+            transform: isMobilePortrait
+              ? `translate(-50%, -50%) rotate(90deg) scale(${scale})`
+              : `translate(-50%, -50%) scale(${scale})`,
+            transformOrigin: 'center center',
             position: 'absolute',
-            top: 0,
-            left: 0,
+            top: '50%',
+            left: '50%',
           }}
         >
           {/* Cassette BG */}
@@ -653,11 +670,13 @@ export default function App() {
       </div>
 
       {/* ── Hint (below cassette, unscaled) ── */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-        <div style={{ color: '#a08840', fontSize: 10, letterSpacing: 3, fontFamily: "'Space Mono', monospace" }}>
-          TAP WHEEL CENTERS · LEFT = PLAY/PAUSE · RIGHT = RESET SPEED
+      {!isMobile && (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+          <div style={{ color: '#a08840', fontSize: 10, letterSpacing: 3, fontFamily: "'Space Mono', monospace" }}>
+            TAP WHEEL CENTERS · LEFT = PLAY/PAUSE · RIGHT = RESET SPEED
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
