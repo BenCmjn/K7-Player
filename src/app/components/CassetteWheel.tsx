@@ -13,14 +13,17 @@ interface CassetteWheelProps {
   onCenterClick: () => void;
   /** Position within TapeControls: 'left' | 'right' */
   side: 'left' | 'right';
+  /** Force the pressed-in visual from outside (e.g. a keyboard shortcut) */
+  forcePressed?: boolean;
 }
 
-export function CassetteWheel({ rotationAngle, onRotate, onCenterClick, side }: CassetteWheelProps) {
+export function CassetteWheel({ rotationAngle, onRotate, onCenterClick, side, forcePressed = false }: CassetteWheelProps) {
   const wheelRef = useRef<HTMLDivElement>(null);
   const centerRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
   const prevAngle = useRef(0);
   const [pressed, setPressed] = useState(false);
+  const isPressed = pressed || forcePressed;
 
   const getAngle = (clientX: number, clientY: number): number => {
     const rect = wheelRef.current!.getBoundingClientRect();
@@ -92,7 +95,7 @@ export function CassetteWheel({ rotationAngle, onRotate, onCenterClick, side }: 
         style={{
           position: 'absolute',
           inset: 0,
-          transform: `scale(${pressed ? 0.94 : 1})`,
+          transform: `scale(${isPressed ? 0.94 : 1})`,
           transition: 'transform 0.12s ease-out',
         }}
       >
@@ -144,8 +147,8 @@ export function CassetteWheel({ rotationAngle, onRotate, onCenterClick, side }: 
             borderRadius: '50%',
             cursor: 'pointer',
             zIndex: 10,
-            background: pressed ? 'rgba(0,0,0,0.18)' : 'transparent',
-            boxShadow: pressed ? 'inset 0 2px 4px rgba(0,0,0,0.35)' : 'none',
+            background: isPressed ? 'rgba(0,0,0,0.18)' : 'transparent',
+            boxShadow: isPressed ? 'inset 0 2px 4px rgba(0,0,0,0.35)' : 'none',
             transition: 'background 0.1s ease-out, box-shadow 0.1s ease-out',
           }}
         />

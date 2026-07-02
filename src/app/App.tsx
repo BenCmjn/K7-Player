@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { CassetteWheel } from './components/CassetteWheel';
 import svgPaths from '../imports/Cassette/svg-kn4si39m8f';
 import { imgCover } from '../imports/Cassette/svg-58mld';
+import qrNetlify from '../assets/qr-netlify.svg';
 
 // ─── Content library ────────────────────────────────────────────────────────
 // Every .mp3 dropped in src/assets/audio becomes a selectable megamix, and the
@@ -79,6 +80,7 @@ function useAudioEngine() {
   const [trackName, setTrackName] = useState('');
   const [isLoaded, setIsLoaded] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
+  const [volume, setVolumeState] = useState(1);
 
   // Wire element events once
   useEffect(() => {
@@ -163,6 +165,14 @@ function useAudioEngine() {
     }
   }, [isScrubbing]);
 
+  const adjustVolume = useCallback((delta: number) => {
+    const a = elRef.current;
+    if (!a) return;
+    const v = Math.max(0, Math.min(1, a.volume + delta));
+    a.volume = v;
+    setVolumeState(v);
+  }, []);
+
   const loadUrl = useCallback((url: string, name: string) => {
     const a = elRef.current;
     if (!a) return;
@@ -181,7 +191,7 @@ function useAudioEngine() {
     setIsLoaded(true);
   }, []);
 
-  return { isPlaying, playbackRate, currentTime, duration, trackName, isLoaded, isScrubbing, togglePlay, seek, setRate, loadUrl };
+  return { isPlaying, playbackRate, currentTime, duration, trackName, isLoaded, isScrubbing, volume, togglePlay, seek, setRate, adjustVolume, loadUrl };
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -226,9 +236,11 @@ interface LCDProps {
   duration: number;
   playbackRate: number;
   trackName: string;
+  volume: number;
+  volumeActive: boolean;
 }
 
-function LCDContent({ isLoaded, isPlaying, isScrubbing, currentTime, duration, playbackRate, trackName }: LCDProps) {
+function LCDContent({ isLoaded, isPlaying, isScrubbing, currentTime, duration, playbackRate, trackName, volume, volumeActive }: LCDProps) {
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
   const rateColor = playbackRate > 1.05 ? '#f0a030' : playbackRate < 0.95 ? '#60c8ff' : '#2aff7a';
 
@@ -264,10 +276,16 @@ function LCDContent({ isLoaded, isPlaying, isScrubbing, currentTime, duration, p
       <div style={{ width: '100%', height: 4, background: '#0a2010', borderRadius: 2, overflow: 'hidden' }}>
         <div style={{ height: '100%', width: `${progress}%`, background: 'linear-gradient(90deg,#1aaa50,#2aff7a)', borderRadius: 2, transition: 'width 0.08s linear' }} />
       </div>
-      {/* Rate */}
-      <div style={{ color: rateColor, fontSize: 13, letterSpacing: 3, fontFamily: "'VT323', monospace", textShadow: `0 0 6px ${rateColor}55` }}>
-        {rateLabel(playbackRate)}
-      </div>
+      {/* Rate — or a transient volume readout while adjusting */}
+      {volumeActive ? (
+        <div style={{ color: '#f0a030', fontSize: 13, letterSpacing: 2, fontFamily: "'VT323', monospace", textShadow: '0 0 6px #f0a03055' }}>
+          VOL {'▮'.repeat(Math.round(volume * 10))}{'▯'.repeat(10 - Math.round(volume * 10))} {Math.round(volume * 100)}%
+        </div>
+      ) : (
+        <div style={{ color: rateColor, fontSize: 13, letterSpacing: 3, fontFamily: "'VT323', monospace", textShadow: `0 0 6px ${rateColor}55` }}>
+          {rateLabel(playbackRate)}
+        </div>
+      )}
       {/* Waveform */}
       <WaveformBars active={isPlaying && !isScrubbing} color="#2aff7a" />
     </div>
@@ -283,10 +301,12 @@ interface TapeControlsProps extends LCDProps {
   onRightRotate: (delta: number) => void;
   onLeftCenter: () => void;
   onRightCenter: () => void;
+  leftPressed: boolean;
+  rightPressed: boolean;
 }
 
 function InteractiveTapeControls(props: TapeControlsProps) {
-  const { leftAngle, rightAngle, onLeftRotate, onRightRotate, onLeftCenter, onRightCenter, ...lcdProps } = props;
+  const { leftAngle, rightAngle, onLeftRotate, onRightRotate, onLeftCenter, onRightCenter, leftPressed, rightPressed, ...lcdProps } = props;
   return (
     <div
       className="absolute overflow-clip rounded-[88px]"
@@ -303,6 +323,7 @@ function InteractiveTapeControls(props: TapeControlsProps) {
         rotationAngle={leftAngle}
         onRotate={onLeftRotate}
         onCenterClick={onLeftCenter}
+        forcePressed={leftPressed}
       />
 
       {/* LCD Screen */}
@@ -338,6 +359,7 @@ function InteractiveTapeControls(props: TapeControlsProps) {
         rotationAngle={rightAngle}
         onRotate={onRightRotate}
         onCenterClick={onRightCenter}
+        forcePressed={rightPressed}
       />
     </div>
   );
@@ -575,17 +597,12 @@ function CoverOutline() {
 
 // ─── Megamix selector (discreet trigger + centred J-card modal) ─────────────
 
-function MegamixTrigger({ onClick }: { onClick: () => void }) {
+function TopTrigger({ icon, label, onClick }: { icon: string; label: string; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      aria-label="Open megamix selector"
+      aria-label={label}
       style={{
-        position: 'absolute',
-        top: 14,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        zIndex: 20,
         display: 'flex',
         alignItems: 'center',
         gap: 8,
@@ -604,8 +621,8 @@ function MegamixTrigger({ onClick }: { onClick: () => void }) {
       onMouseEnter={(e) => { e.currentTarget.style.color = '#e8961c'; e.currentTarget.style.borderColor = '#e8961c'; }}
       onMouseLeave={(e) => { e.currentTarget.style.color = '#a08840'; e.currentTarget.style.borderColor = 'rgba(160,136,64,0.45)'; }}
     >
-      <span aria-hidden style={{ fontSize: 12, lineHeight: 1 }}>▤</span>
-      MEGAMIX
+      <span aria-hidden style={{ fontSize: 12, lineHeight: 1 }}>{icon}</span>
+      {label}
     </button>
   );
 }
@@ -636,7 +653,9 @@ function MegamixModal({ megamixes, currentUrl, onSelect, onClose }: MegamixModal
         alignItems: 'center',
         justifyContent: 'center',
         padding: 16,
-        background: 'rgba(0,0,0,0.55)',
+        background: 'rgba(0,0,0,0.42)',
+        backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
         animation: 'k7-backdrop-in 0.2s ease-out both',
       }}
     >
@@ -651,8 +670,8 @@ function MegamixModal({ megamixes, currentUrl, onSelect, onClose }: MegamixModal
         onClick={(e) => e.stopPropagation()}
         style={{
           width: '100%',
-          maxWidth: 480,
-          maxHeight: '80vh',
+          maxWidth: 560,
+          maxHeight: '82vh',
           background: '#f9faf1',
           border: '2px solid #202020',
           borderRadius: 10,
@@ -751,6 +770,173 @@ function MegamixModal({ megamixes, currentUrl, onSelect, onClose }: MegamixModal
   );
 }
 
+// ─── Controls guide (same J-card modal, adapts to keyboard vs touch) ────────
+
+interface ControlRow {
+  glyph: string;
+  action: string;
+  keys: string[];   // desktop: keycaps + separators ('+', '/')
+  touch: string;    // mobile: gesture phrase
+}
+
+const CONTROL_ROWS: ControlRow[] = [
+  { glyph: '⏯', action: 'Play · Pause', keys: ['A'], touch: 'Tap the left wheel' },
+  { glyph: '⟲', action: 'Reset speed', keys: ['S'], touch: 'Tap the right wheel' },
+  { glyph: '↔', action: 'Scrub · seek', keys: ['←', '/', '→'], touch: 'Scroll the left wheel' },
+  { glyph: '≈', action: 'Speed · chipmunk', keys: ['↑', '/', '↓'], touch: 'Scroll the right wheel' },
+  { glyph: '♪', action: 'Volume', keys: ['hold', 'A', '+', '↑', '/', '↓'], touch: 'Hold left + scroll right' },
+];
+
+function KeyToken({ token }: { token: string }) {
+  // Separators / modifiers render as plain text; real keys render as keycaps
+  if (token === '+' || token === '/') {
+    return <span style={{ color: '#8a8a7e', fontFamily: "'Space Mono', monospace", fontSize: 11 }}>{token}</span>;
+  }
+  if (token === 'hold') {
+    return <span style={{ color: '#8a8a7e', fontFamily: "'Space Mono', monospace", fontSize: 9, letterSpacing: 1, textTransform: 'uppercase' }}>hold</span>;
+  }
+  return (
+    <span
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        minWidth: 18, height: 20, padding: '0 5px',
+        border: '1.5px solid #202020', borderRadius: 4, background: '#fff',
+        fontFamily: "'Space Mono', monospace", fontSize: 11, fontWeight: 700, color: '#202020', lineHeight: 1,
+      }}
+    >
+      {token}
+    </span>
+  );
+}
+
+interface ControlsModalProps {
+  isMobile: boolean;
+  onClose: () => void;
+}
+
+function ControlsModal({ isMobile, onClose }: ControlsModalProps) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 30,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16, background: 'rgba(0,0,0,0.42)',
+        backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
+        animation: 'k7-backdrop-in 0.2s ease-out both',
+      }}
+    >
+      <style>{`
+        @keyframes k7-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes k7-card-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
+        @keyframes k7-row-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+      `}</style>
+
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%', maxWidth: 560, maxHeight: '82vh',
+          background: '#f9faf1', border: '2px solid #202020', borderRadius: 10,
+          boxShadow: '0 20px 60px rgba(0,0,0,0.6)', overflow: 'hidden',
+          display: 'flex', flexDirection: 'column',
+          fontFamily: '"Barlow Condensed", "Oswald", sans-serif',
+          animation: 'k7-card-in 0.28s ease-out both',
+        }}
+      >
+        {/* Header band */}
+        <div style={{ display: 'flex', alignItems: 'stretch', borderBottom: '2px solid #202020', flexShrink: 0 }}>
+          <div style={{ flex: 1, padding: '7px 14px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: -0.5, lineHeight: 1, color: '#202020', textTransform: 'uppercase' }}>
+              Controls
+            </div>
+            <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: 1.5, color: '#202020', textTransform: 'uppercase', marginTop: 2 }}>
+              Type&nbsp;I (Normal) Position · {isMobile ? 'Tap · Scroll · Hold' : 'Keyboard shortcuts'}
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', width: 74 }}>
+            <div style={{ flex: 1, background: '#f0c419' }} />
+            <div style={{ flex: 1, background: '#e8801c' }} />
+            <div style={{ flex: 1, background: '#c0271e' }} />
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            style={{ width: 40, border: 'none', borderLeft: '2px solid #202020', background: '#202020', color: '#f9faf1', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Control rows on red dotted lines, fading in one by one */}
+        <div style={{ padding: '4px 0', overflowY: 'auto' }}>
+          {CONTROL_ROWS.map((r, i) => (
+            <div
+              key={r.action}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                borderTop: i === 0 ? 'none' : '1px dotted rgba(192,39,30,0.6)',
+                padding: '10px 14px', color: '#202020',
+                animation: 'k7-row-in 0.32s ease-out both',
+                animationDelay: `${100 + i * 90}ms`,
+              }}
+            >
+              {/* Left: glyph + action name (handwritten, like a track title) */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <span style={{ flexShrink: 0, width: 16, textAlign: 'center', fontSize: 13, color: '#c0271e' }}>{r.glyph}</span>
+                <span style={{ fontFamily: '"Rock Salt", cursive', fontSize: 13, lineHeight: 1.3, color: '#202020' }}>
+                  {r.action}
+                </span>
+              </div>
+              {/* Right: input — keycaps on desktop, gesture phrase on mobile */}
+              {isMobile ? (
+                <span style={{ flexShrink: 0, textAlign: 'right', fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 0.5, color: '#4a4a40', textTransform: 'uppercase', maxWidth: '55%' }}>
+                  {r.touch}
+                </span>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                  {r.keys.map((k, j) => <KeyToken key={j} token={k} />)}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Desktop only: scan to open on a phone */}
+        {!isMobile && (
+          <div
+            style={{
+              display: 'flex', alignItems: 'center', gap: 14,
+              padding: '12px 14px', borderTop: '2px solid #202020', background: '#f2f1e6',
+              animation: 'k7-row-in 0.32s ease-out both',
+              animationDelay: `${100 + CONTROL_ROWS.length * 90}ms`,
+            }}
+          >
+            <img
+              src={qrNetlify}
+              alt="QR code — open K7 Rebirth on your phone"
+              width={78}
+              height={78}
+              style={{ display: 'block', border: '2px solid #202020', borderRadius: 4, background: '#fff', padding: 4, flexShrink: 0 }}
+            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontFamily: '"Rock Salt", cursive', fontSize: 15, color: '#202020' }}>Try on your phone!</span>
+              <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 9, letterSpacing: 1, color: '#8a8a7e', textTransform: 'uppercase' }}>
+                Scan · k7-rebirth.netlify.app
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ──────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -759,6 +945,13 @@ export default function App() {
   // Which megamix is loaded in the deck
   const [currentUrl, setCurrentUrl] = useState(DEFAULT_MEGAMIX?.url);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
+
+  // Keyboard-driven "pressed" visuals + transient volume HUD
+  const [leftPressed, setLeftPressed] = useState(false);
+  const [rightPressed, setRightPressed] = useState(false);
+  const [volumeActive, setVolumeActive] = useState(false);
+  const volumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load the default tape on mount
   useEffect(() => {
@@ -802,6 +995,120 @@ export default function App() {
     setRightAngle(a => a + delta); // only visual, only on drag
   }, [audio]);
 
+  const pingVolume = useCallback(() => {
+    setVolumeActive(true);
+    if (volumeTimer.current) clearTimeout(volumeTimer.current);
+    volumeTimer.current = setTimeout(() => setVolumeActive(false), 1100);
+  }, []);
+
+  // Latest callbacks, read by the (mounted-once) keyboard listener
+  const latest = useRef({
+    menuOpen: menuOpen || guideOpen,
+    rotateLeft: handleLeftRotate,
+    rotateRight: handleRightRotate,
+    spinRight: setRightAngle,
+    togglePlay: audio.togglePlay,
+    resetRate: () => audio.setRate(1.0),
+    adjustVolume: audio.adjustVolume,
+    pingVolume,
+  });
+  latest.current = {
+    menuOpen: menuOpen || guideOpen,
+    rotateLeft: handleLeftRotate,
+    rotateRight: handleRightRotate,
+    spinRight: setRightAngle,
+    togglePlay: audio.togglePlay,
+    resetRate: () => audio.setRate(1.0),
+    adjustVolume: audio.adjustVolume,
+    pingVolume,
+  };
+
+  // ── Keyboard controls ──────────────────────────────────────────────
+  //  A / S = tap the left / right wheel centre (play-pause / reset speed)
+  //  ← / → = turn the left wheel  (scrub)
+  //  ↑ / ↓ = turn the right wheel (speed)   ·   hold A + ↑/↓ = volume
+  useEffect(() => {
+    const held = new Set<string>();
+    let aDown = false;
+    let aCombo = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const ROT = 3;    // degrees per tick
+    const VOL = 0.02; // volume units per tick
+    const isArrow = (k: string) =>
+      k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown';
+
+    const tick = () => {
+      const c = latest.current;
+      if (c.menuOpen) return;
+      if (held.has('ArrowLeft')) c.rotateLeft(-ROT);
+      if (held.has('ArrowRight')) c.rotateLeft(ROT);
+      if (held.has('ArrowUp')) {
+        if (aDown) { c.adjustVolume(VOL); c.spinRight((a) => a + ROT); c.pingVolume(); aCombo = true; }
+        else c.rotateRight(ROT);
+      }
+      if (held.has('ArrowDown')) {
+        if (aDown) { c.adjustVolume(-VOL); c.spinRight((a) => a - ROT); c.pingVolume(); aCombo = true; }
+        else c.rotateRight(-ROT);
+      }
+    };
+    const start = () => { if (!timer) timer = setInterval(tick, 16); };
+    const stopIfIdle = () => { if (timer && held.size === 0) { clearInterval(timer); timer = null; } };
+
+    const onDown = (e: KeyboardEvent) => {
+      const c = latest.current;
+      const k = e.key;
+      if (k === 'a' || k === 'A') {
+        e.preventDefault();
+        if (e.repeat || c.menuOpen) return;
+        aDown = true; aCombo = false;
+        setLeftPressed(true);
+      } else if (k === 's' || k === 'S') {
+        e.preventDefault();
+        if (e.repeat || c.menuOpen) return;
+        setRightPressed(true);
+        c.resetRate();
+      } else if (isArrow(k)) {
+        e.preventDefault();
+        if (c.menuOpen) return;
+        held.add(k);
+        start();
+      }
+    };
+
+    const onUp = (e: KeyboardEvent) => {
+      const c = latest.current;
+      const k = e.key;
+      if (k === 'a' || k === 'A') {
+        e.preventDefault();
+        setLeftPressed(false);
+        if (aDown && !aCombo && !c.menuOpen) c.togglePlay();
+        aDown = false;
+      } else if (k === 's' || k === 'S') {
+        e.preventDefault();
+        setRightPressed(false);
+      } else if (isArrow(k)) {
+        held.delete(k);
+        stopIfIdle();
+      }
+    };
+
+    const onBlur = () => {
+      held.clear(); aDown = false; aCombo = false;
+      setLeftPressed(false); setRightPressed(false);
+      if (timer) { clearInterval(timer); timer = null; }
+    };
+
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+      window.removeEventListener('blur', onBlur);
+      if (timer) clearInterval(timer);
+    };
+  }, []);
+
   // Natural cassette dimensions from Figma
   const CW = 1080;
   const CH = 662;
@@ -827,8 +1134,11 @@ export default function App() {
         touchAction: 'none',
       }}
     >
-      {/* Discreet trigger that opens the megamix modal */}
-      <MegamixTrigger onClick={() => setMenuOpen(true)} />
+      {/* Discreet triggers: megamix selector + controls guide */}
+      <div style={{ position: 'absolute', top: 14, left: '50%', transform: 'translateX(-50%)', zIndex: 20, display: 'flex', gap: 10 }}>
+        <TopTrigger icon="▤" label="MEGAMIX" onClick={() => { setGuideOpen(false); setMenuOpen(true); }} />
+        <TopTrigger icon="?" label="CONTROLS" onClick={() => { setMenuOpen(false); setGuideOpen(true); }} />
+      </div>
 
       {/* ── Scaled cassette wrapper (rotates 90° to fill narrow portrait screens) ── */}
       <div
@@ -880,6 +1190,8 @@ export default function App() {
             onRightRotate={handleRightRotate}
             onLeftCenter={audio.togglePlay}
             onRightCenter={() => audio.setRate(1.0)}
+            leftPressed={leftPressed}
+            rightPressed={rightPressed}
             isLoaded={audio.isLoaded}
             isPlaying={audio.isPlaying}
             isScrubbing={audio.isScrubbing}
@@ -887,18 +1199,11 @@ export default function App() {
             duration={audio.duration}
             playbackRate={audio.playbackRate}
             trackName={audio.trackName}
+            volume={audio.volume}
+            volumeActive={volumeActive}
           />
         </div>
       </div>
-
-      {/* Hint (desktop only) */}
-      {!isMobile && (
-        <div style={{ position: 'absolute', bottom: 14, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
-          <div style={{ color: '#a08840', fontSize: 10, letterSpacing: 3, fontFamily: "'Space Mono', monospace" }}>
-            TAP WHEEL CENTERS · LEFT = PLAY/PAUSE · RIGHT = RESET SPEED
-          </div>
-        </div>
-      )}
 
       {menuOpen && (
         <MegamixModal
@@ -907,6 +1212,10 @@ export default function App() {
           onSelect={selectMegamix}
           onClose={() => setMenuOpen(false)}
         />
+      )}
+
+      {guideOpen && (
+        <ControlsModal isMobile={isMobile} onClose={() => setGuideOpen(false)} />
       )}
     </div>
   );
