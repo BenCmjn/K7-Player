@@ -4,11 +4,24 @@
     <head>
       
       <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
       <title>K7 Rebirth Music Player</title>
       <meta name="description" content="Experience a nostalgic music player that lets users import MP3s and apply unique effects like Chipmunk or Tape scrub using an interactive cassette design." />
       <meta name="robots" content="noindex, nofollow" />
-      <style>html, body { height: 100%; margin: 0; } #root { height: 100%; }</style>
+      <style>
+        html, body {
+          height: 100%;
+          margin: 0;
+          overflow: hidden;              /* no page scroll — the app is a fixed device */
+          overscroll-behavior: none;     /* kills pull-to-refresh + rubber-band bounce */
+          -webkit-user-select: none;
+          user-select: none;             /* no text selection while scrubbing */
+          -webkit-touch-callout: none;   /* no long-press callout on labels */
+          -webkit-tap-highlight-color: transparent;
+          touch-action: manipulation;    /* no double-tap zoom / 300ms delay */
+        }
+        #root { height: 100%; }
+      </style>
       
     </head>
 

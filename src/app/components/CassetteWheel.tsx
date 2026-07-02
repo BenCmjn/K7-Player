@@ -59,7 +59,11 @@ export function CassetteWheel({ rotationAngle, onRotate, onCenterClick, side }: 
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     isDragging.current = false;
-    wheelRef.current?.releasePointerCapture(e.pointerId);
+    try { wheelRef.current?.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
+  }, []);
+
+  const handlePointerCancel = useCallback(() => {
+    isDragging.current = false;
   }, []);
 
   const posClass = side === 'left'
@@ -70,10 +74,18 @@ export function CassetteWheel({ rotationAngle, onRotate, onCenterClick, side }: 
     <div
       ref={wheelRef}
       className={posClass}
-      style={{ width: 124, height: 124, cursor: 'grab', userSelect: 'none', flexShrink: 0 }}
+      style={{
+        width: 124,
+        height: 124,
+        cursor: 'grab',
+        userSelect: 'none',
+        flexShrink: 0,
+        touchAction: 'none',   /* claim the touch gesture: no page scroll/zoom while turning */
+      }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
     >
       {/* Pressed-state wrapper: scales the whole wheel down when the center is tapped */}
       <div

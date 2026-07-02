@@ -596,8 +596,9 @@ export default function App() {
   return (
     <div
       style={{
-        width: '100%',
-        minHeight: '100vh',
+        position: 'fixed',
+        inset: 0,
+        height: '100dvh',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -606,6 +607,8 @@ export default function App() {
         padding: '24px 16px',
         gap: 28,
         boxSizing: 'border-box',
+        overflow: 'hidden',
+        touchAction: 'none',
       }}
     >
       {/* ── Scaled cassette wrapper (rotates 90° to fill narrow portrait screens) ── */}
