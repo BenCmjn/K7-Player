@@ -44,6 +44,10 @@ const MENU_TRACKS: Megamix[] = MEGAMIXES.filter((m) => m.url !== DEFAULT_MEGAMIX
 
 const FABRIC_URL: string | undefined = Object.values(textureModules)[0];
 
+// Real cassette size for the "actual size" tool. CSS mm ≈ physical mm
+// (1 CSS px = 1/96 in). 1080 is the cassette's natural width in Figma px.
+const REAL_SCALE = (100 * 96) / 25.4 / 1080;
+
 // ─── Audio Engine ──────────────────────────────────────────────────────────
 
 // Let pitch rise/fall with playback speed (the "chipmunk" effect) across engines.
@@ -627,6 +631,69 @@ function TopTrigger({ icon, label, onClick }: { icon: string; label: string; onC
   );
 }
 
+// ─── Real-size resize tool (desktop only) ──────────────────────────────────
+
+const COTE_COLOR = '#a08840';
+
+function RulerIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2.5" y="7" width="19" height="10" rx="1.5" />
+      <path d="M6.5 7v3M10 7v4M13.5 7v3M17 7v4" />
+    </svg>
+  );
+}
+
+function RoundButton({ label, title, onClick }: { label: React.ReactNode; title: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={title}
+      title={title}
+      style={{
+        width: 34, height: 34, flexShrink: 0,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(160,136,64,0.45)',
+        color: '#a08840', borderRadius: '50%', cursor: 'pointer',
+        fontSize: 12, fontFamily: "'Space Mono', monospace", lineHeight: 1,
+        backdropFilter: 'blur(4px)', transition: 'color 0.2s, border-color 0.2s',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.color = '#e8961c'; e.currentTarget.style.borderColor = '#e8961c'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.color = '#a08840'; e.currentTarget.style.borderColor = 'rgba(160,136,64,0.45)'; }}
+    >
+      {label}
+    </button>
+  );
+}
+
+// Dimension lines (cotes) drawn along the cassette's top + left edges.
+// Anchored to the wrapper edges so they track the cassette size.
+function DimensionLines() {
+  const mono = { fontFamily: "'Space Mono', monospace", color: COTE_COLOR, fontSize: 10, letterSpacing: 2 } as const;
+  return (
+    <>
+      {/* Top — length */}
+      <div style={{ position: 'absolute', bottom: '100%', left: 0, right: 0, marginBottom: 16, pointerEvents: 'none' }}>
+        <div style={{ ...mono, textAlign: 'center', marginBottom: 5 }}>100 mm</div>
+        <div style={{ position: 'relative', height: 8 }}>
+          <div style={{ position: 'absolute', left: 0, right: 0, top: '50%', borderTop: `1px solid ${COTE_COLOR}` }} />
+          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, borderLeft: `1px solid ${COTE_COLOR}` }} />
+          <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, borderLeft: `1px solid ${COTE_COLOR}` }} />
+        </div>
+      </div>
+      {/* Left — height */}
+      <div style={{ position: 'absolute', right: '100%', top: 0, bottom: 0, marginRight: 16, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
+        <div style={{ ...mono, writingMode: 'vertical-rl', transform: 'rotate(180deg)', textAlign: 'center', marginRight: 5 }}>65 mm</div>
+        <div style={{ position: 'relative', width: 8, alignSelf: 'stretch' }}>
+          <div style={{ position: 'absolute', top: 0, bottom: 0, left: '50%', borderLeft: `1px solid ${COTE_COLOR}` }} />
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, borderTop: `1px solid ${COTE_COLOR}` }} />
+          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, borderTop: `1px solid ${COTE_COLOR}` }} />
+        </div>
+      </div>
+    </>
+  );
+}
+
 interface MegamixModalProps {
   megamixes: Megamix[];
   currentUrl?: string;
@@ -947,6 +1014,10 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
 
+  // Real-size resize tool (desktop): manualScale overrides the auto fit-scale
+  const [resizeMode, setResizeMode] = useState(false);
+  const [manualScale, setManualScale] = useState<number | null>(null);
+
   // Keyboard-driven "pressed" visuals + transient volume HUD
   const [leftPressed, setLeftPressed] = useState(false);
   const [rightPressed, setRightPressed] = useState(false);
@@ -981,9 +1052,19 @@ export default function App() {
   const PAD = 32;
   const isMobile = Math.min(viewport.w, viewport.h) < 768;
   const isMobilePortrait = isMobile && viewport.h > viewport.w;
-  const scale = isMobilePortrait
+  const autoScale = isMobilePortrait
     ? Math.min((viewport.w - PAD) / 662, (viewport.h - PAD) / 1080)
     : Math.min(1, (viewport.w - PAD) / 1080, (viewport.h - PAD) / 662);
+  // Desktop real-size override; mobile always auto-fits.
+  const scale = (!isMobile && manualScale != null) ? manualScale : autoScale;
+
+  const enterResize = useCallback(() => {
+    setManualScale((s) => s ?? REAL_SCALE);
+    setResizeMode(true);
+  }, []);
+  const stepScale = useCallback((factor: number) => {
+    setManualScale((s) => Math.max(0.15, Math.min(1.15, (s ?? REAL_SCALE) * factor)));
+  }, []);
 
   const handleLeftRotate = useCallback((delta: number) => {
     audio.seek(delta * 0.07);
@@ -1140,6 +1221,21 @@ export default function App() {
         <TopTrigger icon="?" label="CONTROLS" onClick={() => { setMenuOpen(false); setGuideOpen(true); }} />
       </div>
 
+      {/* Real-size resize tool (desktop only) */}
+      {!isMobile && (
+        <div style={{ position: 'absolute', top: 14, right: 14, zIndex: 20, display: 'flex', gap: 8, alignItems: 'center' }}>
+          {resizeMode ? (
+            <>
+              <RoundButton title="Réduire" label="−" onClick={() => stepScale(1 / 1.06)} />
+              <RoundButton title="Agrandir" label="+" onClick={() => stepScale(1.06)} />
+              <RoundButton title="Terminé" label="OK" onClick={() => setResizeMode(false)} />
+            </>
+          ) : (
+            <RoundButton title="Taille réelle (100 × 65 mm)" label={<RulerIcon />} onClick={enterResize} />
+          )}
+        </div>
+      )}
+
       {/* ── Scaled cassette wrapper (rotates 90° to fill narrow portrait screens) ── */}
       <div
         style={{
@@ -1149,6 +1245,7 @@ export default function App() {
           flexShrink: 0,
         }}
       >
+        {resizeMode && !isMobile && <DimensionLines />}
         <div
           style={{
             width: CW,
