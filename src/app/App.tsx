@@ -307,10 +307,11 @@ interface TapeControlsProps extends LCDProps {
   onRightCenter: () => void;
   leftPressed: boolean;
   rightPressed: boolean;
+  onLeftHoldChange: (held: boolean) => void;
 }
 
 function InteractiveTapeControls(props: TapeControlsProps) {
-  const { leftAngle, rightAngle, onLeftRotate, onRightRotate, onLeftCenter, onRightCenter, leftPressed, rightPressed, ...lcdProps } = props;
+  const { leftAngle, rightAngle, onLeftRotate, onRightRotate, onLeftCenter, onRightCenter, leftPressed, rightPressed, onLeftHoldChange, ...lcdProps } = props;
   return (
     <div
       className="absolute overflow-clip rounded-[88px]"
@@ -328,6 +329,7 @@ function InteractiveTapeControls(props: TapeControlsProps) {
         onRotate={onLeftRotate}
         onCenterClick={onLeftCenter}
         forcePressed={leftPressed}
+        onHoldChange={onLeftHoldChange}
       />
 
       {/* LCD Screen */}
@@ -1021,6 +1023,15 @@ export default function App() {
   // Keyboard-driven "pressed" visuals + transient volume HUD
   const [leftPressed, setLeftPressed] = useState(false);
   const [rightPressed, setRightPressed] = useState(false);
+  // Touch/mouse hold on the left wheel's center (bridges the same combo to touch + mouse-drag)
+  const [leftHeldTouch, setLeftHeldTouch] = useState(false);
+  const leftHeld = leftPressed || leftHeldTouch;
+  // Suppresses the play/pause tap-toggle when the hold was actually used as the volume combo
+  const leftComboUsedRef = useRef(false);
+  const handleLeftHoldChange = useCallback((held: boolean) => {
+    if (held) leftComboUsedRef.current = false;
+    setLeftHeldTouch(held);
+  }, []);
   const [volumeActive, setVolumeActive] = useState(false);
   const volumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1066,21 +1077,35 @@ export default function App() {
     setManualScale((s) => Math.max(0.15, Math.min(1.15, (s ?? REAL_SCALE) * factor)));
   }, []);
 
-  const handleLeftRotate = useCallback((delta: number) => {
-    audio.seek(delta * 0.07);
-    setLeftAngle(a => a + delta); // only visual, only on drag
-  }, [audio]);
-
-  const handleRightRotate = useCallback((delta: number) => {
-    audio.setRate(audio.playbackRate + delta * 0.012);
-    setRightAngle(a => a + delta); // only visual, only on drag
-  }, [audio]);
-
   const pingVolume = useCallback(() => {
     setVolumeActive(true);
     if (volumeTimer.current) clearTimeout(volumeTimer.current);
     volumeTimer.current = setTimeout(() => setVolumeActive(false), 1100);
   }, []);
+
+  const handleLeftRotate = useCallback((delta: number) => {
+    // Holding the left wheel down is the volume modifier — don't also scrub while held.
+    if (leftHeld) return;
+    audio.seek(delta * 0.07);
+    setLeftAngle(a => a + delta); // only visual, only on drag
+  }, [audio, leftHeld]);
+
+  const handleRightRotate = useCallback((delta: number) => {
+    if (leftHeld) {
+      // Left held (keyboard A, touch, or mouse) + right wheel drag/scroll → volume
+      audio.adjustVolume(delta * 0.004);
+      pingVolume();
+      leftComboUsedRef.current = true; // suppress the left tap-to-toggle-play once released
+    } else {
+      audio.setRate(audio.playbackRate + delta * 0.012);
+    }
+    setRightAngle(a => a + delta); // only visual, only on drag
+  }, [audio, leftHeld, pingVolume]);
+
+  const handleLeftCenterClick = useCallback(() => {
+    if (leftComboUsedRef.current) { leftComboUsedRef.current = false; return; }
+    audio.togglePlay();
+  }, [audio]);
 
   // Latest callbacks, read by the (mounted-once) keyboard listener
   const latest = useRef({
@@ -1121,8 +1146,8 @@ export default function App() {
     const tick = () => {
       const c = latest.current;
       if (c.menuOpen) return;
-      if (held.has('ArrowLeft')) c.rotateLeft(-ROT);
-      if (held.has('ArrowRight')) c.rotateLeft(ROT);
+      if (held.has('ArrowLeft')) { if (aDown) aCombo = true; else c.rotateLeft(-ROT); }
+      if (held.has('ArrowRight')) { if (aDown) aCombo = true; else c.rotateLeft(ROT); }
       if (held.has('ArrowUp')) {
         if (aDown) { c.adjustVolume(VOL); c.spinRight((a) => a + ROT); c.pingVolume(); aCombo = true; }
         else c.rotateRight(ROT);
@@ -1285,10 +1310,11 @@ export default function App() {
             rightAngle={rightAngle}
             onLeftRotate={handleLeftRotate}
             onRightRotate={handleRightRotate}
-            onLeftCenter={audio.togglePlay}
+            onLeftCenter={handleLeftCenterClick}
             onRightCenter={() => audio.setRate(1.0)}
             leftPressed={leftPressed}
             rightPressed={rightPressed}
+            onLeftHoldChange={handleLeftHoldChange}
             isLoaded={audio.isLoaded}
             isPlaying={audio.isPlaying}
             isScrubbing={audio.isScrubbing}

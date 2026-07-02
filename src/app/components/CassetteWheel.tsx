@@ -15,9 +15,11 @@ interface CassetteWheelProps {
   side: 'left' | 'right';
   /** Force the pressed-in visual from outside (e.g. a keyboard shortcut) */
   forcePressed?: boolean;
+  /** Fires true/false when the center is held down via touch/mouse (not just tapped) */
+  onHoldChange?: (held: boolean) => void;
 }
 
-export function CassetteWheel({ rotationAngle, onRotate, onCenterClick, side, forcePressed = false }: CassetteWheelProps) {
+export function CassetteWheel({ rotationAngle, onRotate, onCenterClick, side, forcePressed = false, onHoldChange }: CassetteWheelProps) {
   const wheelRef = useRef<HTMLDivElement>(null);
   const centerRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
@@ -129,14 +131,16 @@ export function CassetteWheel({ rotationAngle, onRotate, onCenterClick, side, fo
           onPointerDown={(e) => {
             e.stopPropagation();
             setPressed(true);
+            onHoldChange?.(true);
             e.currentTarget.setPointerCapture(e.pointerId);
           }}
           onPointerUp={(e) => {
             setPressed(false);
+            onHoldChange?.(false);
             e.currentTarget.releasePointerCapture(e.pointerId);
           }}
-          onPointerCancel={() => setPressed(false)}
-          onPointerLeave={() => setPressed(false)}
+          onPointerCancel={() => { setPressed(false); onHoldChange?.(false); }}
+          onPointerLeave={() => { setPressed(false); onHoldChange?.(false); }}
           style={{
             position: 'absolute',
             width: 44,
