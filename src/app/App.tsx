@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { CassetteWheel } from './components/CassetteWheel';
 import svgPaths from '../imports/Cassette/svg-kn4si39m8f';
 import { imgCover } from '../imports/Cassette/svg-58mld';
+import defaultTapeUrl from '../assets/audio/sloco2007-03-15d1t04.mp3';
 
 // ─── Audio Engine ──────────────────────────────────────────────────────────
 
@@ -110,27 +111,43 @@ function useAudioEngine() {
     if (isPlayingRef.current) startFrom(getCurrentOffset(), clamped);
   }, [getCurrentOffset, startFrom]);
 
+  const loadBuffer = useCallback((buffer: AudioBuffer, name: string) => {
+    killSource();
+    isPlayingRef.current = false;
+    bufferRef.current = buffer;
+    durationRef.current = buffer.duration;
+    startOffsetRef.current = 0;
+    rateRef.current = 1.0;
+    setTrackName(name);
+    setDuration(buffer.duration);
+    setCurrentTime(0);
+    setIsPlaying(false);
+    setPlaybackRateState(1.0);
+    setIsLoaded(true);
+  }, [killSource]);
+
   const loadFile = useCallback(async (file: File) => {
     const ctx = getCtx();
     try {
       const arr = await file.arrayBuffer();
       const buffer = await ctx.decodeAudioData(arr);
-      killSource();
-      isPlayingRef.current = false;
-      bufferRef.current = buffer;
-      durationRef.current = buffer.duration;
-      startOffsetRef.current = 0;
-      rateRef.current = 1.0;
-      setTrackName(file.name.replace(/\.(mp3|wav|ogg|m4a|aac|flac)$/i, ''));
-      setDuration(buffer.duration);
-      setCurrentTime(0);
-      setIsPlaying(false);
-      setPlaybackRateState(1.0);
-      setIsLoaded(true);
+      loadBuffer(buffer, file.name.replace(/\.(mp3|wav|ogg|m4a|aac|flac)$/i, ''));
     } catch (err) {
       console.error('Failed to decode audio:', err);
     }
-  }, [killSource]);
+  }, [loadBuffer]);
+
+  const loadUrl = useCallback(async (url: string, name: string) => {
+    const ctx = getCtx();
+    try {
+      const res = await fetch(url);
+      const arr = await res.arrayBuffer();
+      const buffer = await ctx.decodeAudioData(arr);
+      loadBuffer(buffer, name);
+    } catch (err) {
+      console.error('Failed to decode audio:', err);
+    }
+  }, [loadBuffer]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -139,7 +156,7 @@ function useAudioEngine() {
     return () => clearInterval(id);
   }, [getCurrentOffset]);
 
-  return { isPlaying, playbackRate, currentTime, duration, trackName, isLoaded, isScrubbing, togglePlay, seek, setRate, loadFile };
+  return { isPlaying, playbackRate, currentTime, duration, trackName, isLoaded, isScrubbing, togglePlay, seek, setRate, loadFile, loadUrl };
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -434,7 +451,7 @@ function RecordingTimeDetail() {
 }
 
 function CoverLabel({ trackName }: { trackName: string }) {
-  const displayName = trackName || 'K7 rebirth v_1';
+  const displayName = trackName || 'K7 rebirth';
   const fontSize = displayName.length > 18 ? 28 : displayName.length > 12 ? 36 : 44;
   return (
     <div className="absolute bg-[#f9faf1] border-[#202020] border-[1.5px] border-solid h-[83px] left-[180px] overflow-clip rounded-[64px] top-[39px] w-[598px]">
@@ -534,7 +551,12 @@ function CoverOutline() {
 
 export default function App() {
   const audio = useAudioEngine();
-  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Preload the tape that ships in the cassette
+  useEffect(() => {
+    audio.loadUrl(defaultTapeUrl, 'K7 rebirth');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Wheel angles — only updated when user drags (no playback animation)
   const [leftAngle, setLeftAngle] = useState(0);
@@ -558,13 +580,6 @@ export default function App() {
     audio.setRate(audio.playbackRate + delta * 0.012);
     setRightAngle(a => a + delta); // only visual, only on drag
   }, [audio]);
-
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    await audio.loadFile(file);
-    e.target.value = '';
-  };
 
   // Natural cassette dimensions from Figma
   const CW = 1080;
@@ -637,45 +652,11 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── LOAD button (below cassette,  bg-[#00000000]unscaled) ── */}
+      {/* ── Hint (below cassette, unscaled) ── */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          style={{
-            background: 'none',
-            border: '1.5px solid #3a3020',
-            color: '#a08840',
-            padding: '10px 28px',
-            borderRadius: 4,
-            cursor: 'pointer',
-            fontSize: 12,
-            letterSpacing: 3,
-            fontFamily: "'Space Mono', monospace",
-            transition: 'border-color 0.2s, color 0.2s, box-shadow 0.2s',
-          }}
-          onMouseEnter={e => {
-            e.currentTarget.style.borderColor = '#e8961c';
-            e.currentTarget.style.color = '#e8961c';
-            e.currentTarget.style.boxShadow = '0 0 12px rgba(232,150,28,0.2)';
-          }}
-          onMouseLeave={e => {
-            e.currentTarget.style.borderColor = '#3a3020';
-            e.currentTarget.style.color = '#a08840';
-            e.currentTarget.style.boxShadow = 'none';
-          }}
-        >
-          ▲ INSERT TAPE
-        </button>
         <div style={{ color: '#a08840', fontSize: 10, letterSpacing: 3, fontFamily: "'Space Mono', monospace" }}>
           TAP WHEEL CENTERS · LEFT = PLAY/PAUSE · RIGHT = RESET SPEED
         </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".mp3,.wav,.ogg,.m4a,.aac,.flac,audio/*"
-          style={{ display: 'none' }}
-          onChange={handleFileChange}
-        />
       </div>
     </div>
   );

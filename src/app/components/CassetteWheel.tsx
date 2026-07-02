@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useState } from 'react';
 
 // SVG path for the reel/pencil-hole hub (from Figma import)
 const REEL_HUB_PATH =
@@ -20,6 +20,7 @@ export function CassetteWheel({ rotationAngle, onRotate, onCenterClick, side }: 
   const centerRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
   const prevAngle = useRef(0);
+  const [pressed, setPressed] = useState(false);
 
   const getAngle = (clientX: number, clientY: number): number => {
     const rect = wheelRef.current!.getBoundingClientRect();
@@ -74,46 +75,69 @@ export function CassetteWheel({ rotationAngle, onRotate, onCenterClick, side }: 
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
     >
-      {/* Rotating visual: outer ring + reel hub */}
+      {/* Pressed-state wrapper: scales the whole wheel down when the center is tapped */}
       <div
         style={{
           position: 'absolute',
           inset: 0,
-          transform: `rotate(${rotationAngle}deg)`,
-          willChange: 'transform',
+          transform: `scale(${pressed ? 0.94 : 1})`,
+          transition: 'transform 0.12s ease-out',
         }}
       >
-        {/* Outer circle stroke */}
-        <div className="absolute left-[3px] size-[118px] top-[3px]">
-          <svg className="absolute block inset-0 size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 118 118">
-            <circle cx="59" cy="59" r="57.5" stroke="#202020" strokeWidth="3" />
-          </svg>
+        {/* Rotating visual: outer ring + reel hub */}
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            transform: `rotate(${rotationAngle}deg)`,
+            willChange: 'transform',
+          }}
+        >
+          {/* Outer circle stroke */}
+          <div className="absolute left-[3px] size-[118px] top-[3px]">
+            <svg className="absolute block inset-0 size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 118 118">
+              <circle cx="59" cy="59" r="57.5" stroke="#202020" strokeWidth="3" />
+            </svg>
+          </div>
+          {/* Reel hub (pencil hole gear shape) */}
+          <div className="absolute h-[88px] left-[18px] top-[18px] w-[87.316px]">
+            <svg className="absolute block inset-0 size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 87.3164 88">
+              <path d={REEL_HUB_PATH} fill="#202020" />
+            </svg>
+          </div>
         </div>
-        {/* Reel hub (pencil hole gear shape) */}
-        <div className="absolute h-[88px] left-[18px] top-[18px] w-[87.316px]">
-          <svg className="absolute block inset-0 size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 87.3164 88">
-            <path d={REEL_HUB_PATH} fill="#202020" />
-          </svg>
-        </div>
-      </div>
 
-      {/* Transparent center click target (does not rotate) */}
-      <div
-        ref={centerRef}
-        onClick={(e) => { e.stopPropagation(); onCenterClick(); }}
-        onPointerDown={(e) => e.stopPropagation()}
-        style={{
-          position: 'absolute',
-          width: 44,
-          height: 44,
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          borderRadius: '50%',
-          cursor: 'pointer',
-          zIndex: 10,
-        }}
-      />
+        {/* Transparent center click target (does not rotate) */}
+        <div
+          ref={centerRef}
+          onClick={(e) => { e.stopPropagation(); onCenterClick(); }}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            setPressed(true);
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerUp={(e) => {
+            setPressed(false);
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          }}
+          onPointerCancel={() => setPressed(false)}
+          onPointerLeave={() => setPressed(false)}
+          style={{
+            position: 'absolute',
+            width: 44,
+            height: 44,
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            borderRadius: '50%',
+            cursor: 'pointer',
+            zIndex: 10,
+            background: pressed ? 'rgba(0,0,0,0.18)' : 'transparent',
+            boxShadow: pressed ? 'inset 0 2px 4px rgba(0,0,0,0.35)' : 'none',
+            transition: 'background 0.1s ease-out, box-shadow 0.1s ease-out',
+          }}
+        />
+      </div>
     </div>
   );
 }
