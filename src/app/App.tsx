@@ -2,19 +2,75 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { CassetteWheel } from './components/CassetteWheel';
 import svgPaths from '../imports/Cassette/svg-kn4si39m8f';
 import { imgCover } from '../imports/Cassette/svg-58mld';
-import defaultTapeUrl from '../assets/audio/sloco2007-03-15d1t04.mp3';
+
+// ─── Content library ────────────────────────────────────────────────────────
+// Every .mp3 dropped in src/assets/audio becomes a selectable megamix, and the
+// first image dropped in src/assets/textures becomes the background — no manual
+// import needed, just drop the file in the folder.
+
+const audioModules = import.meta.glob('../assets/audio/*.mp3', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+}) as Record<string, string>;
+
+const textureModules = import.meta.glob('../assets/textures/*.{png,jpg,jpeg,webp}', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+}) as Record<string, string>;
+
+interface Megamix {
+  url: string;
+  name: string;
+}
+
+function prettifyName(path: string): string {
+  const file = path.split('/').pop()!.replace(/\.mp3$/i, '');
+  return file.replace(/[-_.]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+const MEGAMIXES: Megamix[] = Object.entries(audioModules)
+  .map(([path, url]) => ({ url, name: prettifyName(path) }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+// K7 Rebirth ships as the default tape; fall back to the first one alphabetically.
+const DEFAULT_MEGAMIX: Megamix | undefined =
+  MEGAMIXES.find((m) => /rebirth/i.test(m.name)) ?? MEGAMIXES[0];
+
+// Everything except the default is offered in the selector menu.
+const MENU_TRACKS: Megamix[] = MEGAMIXES.filter((m) => m.url !== DEFAULT_MEGAMIX?.url);
+
+const FABRIC_URL: string | undefined = Object.values(textureModules)[0];
 
 // ─── Audio Engine ──────────────────────────────────────────────────────────
 
+// Let pitch rise/fall with playback speed (the "chipmunk" effect) across engines.
+function setPreservesPitch(a: HTMLAudioElement, v: boolean) {
+  const el = a as HTMLAudioElement & {
+    preservesPitch?: boolean;
+    mozPreservesPitch?: boolean;
+    webkitPreservesPitch?: boolean;
+  };
+  el.preservesPitch = v;
+  el.mozPreservesPitch = v;
+  el.webkitPreservesPitch = v;
+}
+
 function useAudioEngine() {
-  const ctxRef = useRef<AudioContext | null>(null);
-  const bufferRef = useRef<AudioBuffer | null>(null);
-  const sourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const startCtxTimeRef = useRef(0);
-  const startOffsetRef = useRef(0);
-  const isPlayingRef = useRef(false);
+  // A streaming <audio> element keeps memory tiny even for hour-long megamixes,
+  // unlike decoding the whole file into a Web Audio buffer (which OOMs on mobile).
+  const elRef = useRef<HTMLAudioElement | null>(null);
+  if (elRef.current === null && typeof Audio !== 'undefined') {
+    const a = new Audio();
+    a.preload = 'auto';
+    setPreservesPitch(a, false);
+    elRef.current = a;
+  }
+
   const rateRef = useRef(1.0);
-  const durationRef = useRef(0);
+  const wasPlayingRef = useRef(false);
+  const scrubTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackRate, setPlaybackRateState] = useState(1.0);
@@ -24,139 +80,108 @@ function useAudioEngine() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
 
-  const getCtx = () => {
-    if (!ctxRef.current) ctxRef.current = new AudioContext();
-    return ctxRef.current;
-  };
-
-  const getCurrentOffset = useCallback((): number => {
-    if (!ctxRef.current || !isPlayingRef.current) return startOffsetRef.current;
-    const elapsed = (ctxRef.current.currentTime - startCtxTimeRef.current) * rateRef.current;
-    return Math.min(startOffsetRef.current + elapsed, durationRef.current);
-  }, []);
-
-  const killSource = useCallback(() => {
-    if (sourceRef.current) {
-      try { sourceRef.current.stop(); } catch { /* already stopped */ }
-      sourceRef.current.disconnect();
-      sourceRef.current = null;
-    }
-  }, []);
-
-  const startFrom = useCallback((offset: number, rate: number) => {
-    const ctx = getCtx();
-    const buffer = bufferRef.current;
-    if (!buffer) return;
-    void ctx.resume();
-    killSource();
-    const src = ctx.createBufferSource();
-    src.buffer = buffer;
-    src.playbackRate.value = Math.max(0.1, Math.min(16, rate));
-    src.connect(ctx.destination);
-    const safe = Math.max(0, Math.min(offset, buffer.duration - 0.05));
-    src.start(0, safe);
-    src.onended = () => {
-      const pos = startOffsetRef.current + (ctx.currentTime - startCtxTimeRef.current) * rateRef.current;
-      if (isPlayingRef.current && pos >= durationRef.current - 0.3) {
-        isPlayingRef.current = false;
-        startOffsetRef.current = 0;
-        setIsPlaying(false);
-        setCurrentTime(0);
-      }
+  // Wire element events once
+  useEffect(() => {
+    const a = elRef.current;
+    if (!a) return;
+    const onMeta = () => setDuration(Number.isFinite(a.duration) ? a.duration : 0);
+    const onTime = () => setCurrentTime(a.currentTime);
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    const onEnded = () => { a.currentTime = 0; setCurrentTime(0); setIsPlaying(false); };
+    a.addEventListener('loadedmetadata', onMeta);
+    a.addEventListener('durationchange', onMeta);
+    a.addEventListener('timeupdate', onTime);
+    a.addEventListener('play', onPlay);
+    a.addEventListener('pause', onPause);
+    a.addEventListener('ended', onEnded);
+    return () => {
+      a.removeEventListener('loadedmetadata', onMeta);
+      a.removeEventListener('durationchange', onMeta);
+      a.removeEventListener('timeupdate', onTime);
+      a.removeEventListener('play', onPlay);
+      a.removeEventListener('pause', onPause);
+      a.removeEventListener('ended', onEnded);
     };
-    startCtxTimeRef.current = ctx.currentTime;
-    startOffsetRef.current = safe;
-    sourceRef.current = src;
-  }, [killSource]);
+  }, []);
+
+  // Smooth LCD updates (timeupdate alone only fires ~4×/s)
+  useEffect(() => {
+    const id = setInterval(() => {
+      const a = elRef.current;
+      if (a && !a.paused) setCurrentTime(a.currentTime);
+    }, 100);
+    return () => clearInterval(id);
+  }, []);
 
   const play = useCallback(() => {
-    if (!bufferRef.current) return;
-    startFrom(getCurrentOffset(), rateRef.current);
-    isPlayingRef.current = true;
-    setIsPlaying(true);
-  }, [startFrom, getCurrentOffset]);
+    const a = elRef.current;
+    if (!a || !a.src) return;
+    setPreservesPitch(a, false);
+    a.playbackRate = rateRef.current;
+    void a.play();
+  }, []);
 
   const pause = useCallback(() => {
-    startOffsetRef.current = getCurrentOffset();
-    killSource();
-    isPlayingRef.current = false;
-    setIsPlaying(false);
-  }, [getCurrentOffset, killSource]);
+    elRef.current?.pause();
+  }, []);
 
   const togglePlay = useCallback(() => {
-    if (isPlayingRef.current) pause(); else play();
+    const a = elRef.current;
+    if (!a) return;
+    if (a.paused) play(); else pause();
   }, [play, pause]);
 
-  const scrubTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const seek = useCallback((deltaSeconds: number) => {
-    const newOff = Math.max(0, Math.min(getCurrentOffset() + deltaSeconds, durationRef.current - 0.05));
-    startOffsetRef.current = newOff;
-    setCurrentTime(newOff);
+    const a = elRef.current;
+    if (!a || !Number.isFinite(a.duration) || a.duration === 0) return;
+    const newT = Math.max(0, Math.min(a.currentTime + deltaSeconds, a.duration - 0.05));
+    if (!isScrubbing) wasPlayingRef.current = !a.paused;
+    a.currentTime = newT;
+    setCurrentTime(newT);
     setIsScrubbing(true);
-    // Brief playback at scrub speed for audio feedback
-    startFrom(newOff, (deltaSeconds >= 0 ? 3.5 : 3.5) * rateRef.current);
+    // Brief fast playback for the tape-scrub screech
+    setPreservesPitch(a, false);
+    a.playbackRate = 3.0;
+    void a.play();
     if (scrubTimerRef.current) clearTimeout(scrubTimerRef.current);
     scrubTimerRef.current = setTimeout(() => {
       setIsScrubbing(false);
-      if (isPlayingRef.current) startFrom(startOffsetRef.current, rateRef.current);
-      else killSource();
-    }, 280);
-  }, [getCurrentOffset, startFrom, killSource]);
+      a.playbackRate = rateRef.current;
+      if (!wasPlayingRef.current) a.pause();
+    }, 240);
+  }, [isScrubbing]);
 
   const setRate = useCallback((newRate: number) => {
     const clamped = Math.max(0.25, Math.min(4.0, newRate));
     rateRef.current = clamped;
     setPlaybackRateState(clamped);
-    if (isPlayingRef.current) startFrom(getCurrentOffset(), clamped);
-  }, [getCurrentOffset, startFrom]);
+    const a = elRef.current;
+    if (a) {
+      setPreservesPitch(a, false);
+      if (!isScrubbing) a.playbackRate = clamped; // don't fight the scrub burst
+    }
+  }, [isScrubbing]);
 
-  const loadBuffer = useCallback((buffer: AudioBuffer, name: string) => {
-    killSource();
-    isPlayingRef.current = false;
-    bufferRef.current = buffer;
-    durationRef.current = buffer.duration;
-    startOffsetRef.current = 0;
+  const loadUrl = useCallback((url: string, name: string) => {
+    const a = elRef.current;
+    if (!a) return;
+    a.pause();
+    a.src = url;
+    a.load();
     rateRef.current = 1.0;
+    setPreservesPitch(a, false);
+    a.playbackRate = 1.0;
     setTrackName(name);
-    setDuration(buffer.duration);
-    setCurrentTime(0);
-    setIsPlaying(false);
     setPlaybackRateState(1.0);
+    setCurrentTime(0);
+    setDuration(0);
+    setIsPlaying(false);
+    setIsScrubbing(false);
     setIsLoaded(true);
-  }, [killSource]);
+  }, []);
 
-  const loadFile = useCallback(async (file: File) => {
-    const ctx = getCtx();
-    try {
-      const arr = await file.arrayBuffer();
-      const buffer = await ctx.decodeAudioData(arr);
-      loadBuffer(buffer, file.name.replace(/\.(mp3|wav|ogg|m4a|aac|flac)$/i, ''));
-    } catch (err) {
-      console.error('Failed to decode audio:', err);
-    }
-  }, [loadBuffer]);
-
-  const loadUrl = useCallback(async (url: string, name: string) => {
-    const ctx = getCtx();
-    try {
-      const res = await fetch(url);
-      const arr = await res.arrayBuffer();
-      const buffer = await ctx.decodeAudioData(arr);
-      loadBuffer(buffer, name);
-    } catch (err) {
-      console.error('Failed to decode audio:', err);
-    }
-  }, [loadBuffer]);
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      if (isPlayingRef.current) setCurrentTime(getCurrentOffset());
-    }, 80);
-    return () => clearInterval(id);
-  }, [getCurrentOffset]);
-
-  return { isPlaying, playbackRate, currentTime, duration, trackName, isLoaded, isScrubbing, togglePlay, seek, setRate, loadFile, loadUrl };
+  return { isPlaying, playbackRate, currentTime, duration, trackName, isLoaded, isScrubbing, togglePlay, seek, setRate, loadUrl };
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -450,9 +475,10 @@ function RecordingTimeDetail() {
   );
 }
 
-function CoverLabel({ trackName }: { trackName: string }) {
-  const displayName = trackName || 'K7 rebirth';
-  const fontSize = displayName.length > 18 ? 28 : displayName.length > 12 ? 36 : 44;
+function CoverLabel() {
+  // The cover is fixed branding — it stays "K7 rebirth" regardless of the loaded track.
+  const displayName = 'K7 rebirth';
+  const fontSize = 44;
   return (
     <div className="absolute bg-[#f9faf1] border-[#202020] border-[1.5px] border-solid h-[83px] left-[180px] overflow-clip rounded-[64px] top-[39px] w-[598px]">
       {/* Red lines */}
@@ -478,7 +504,7 @@ function CoverLabel({ trackName }: { trackName: string }) {
           fontFamily: '"Rock Salt", cursive',
           fontSize,
           color: '#202020',
-          letterSpacing: trackName ? 2 : 8.8,
+          letterSpacing: 8.8,
           whiteSpace: 'nowrap',
           maxWidth: '90%',
           overflow: 'hidden',
@@ -492,7 +518,7 @@ function CoverLabel({ trackName }: { trackName: string }) {
   );
 }
 
-function CoverArea({ trackName }: { trackName: string }) {
+function CoverArea() {
   return (
     <div
       className="absolute overflow-clip"
@@ -520,7 +546,7 @@ function CoverArea({ trackName }: { trackName: string }) {
       <ScrubLabel />
 
       {/* Central label */}
-      <CoverLabel trackName={trackName} />
+      <CoverLabel />
 
       {/* A SIDE */}
       <div className="absolute content-stretch flex flex-col items-center left-[60px] top-[57px] whitespace-nowrap">
@@ -547,16 +573,203 @@ function CoverOutline() {
   );
 }
 
+// ─── Megamix selector (discreet trigger + centred J-card modal) ─────────────
+
+function MegamixTrigger({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label="Open megamix selector"
+      style={{
+        position: 'absolute',
+        top: 14,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 20,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        background: 'rgba(0,0,0,0.25)',
+        border: '1px solid rgba(160,136,64,0.45)',
+        color: '#a08840',
+        padding: '6px 16px',
+        borderRadius: 999,
+        cursor: 'pointer',
+        fontSize: 10,
+        letterSpacing: 3,
+        fontFamily: "'Space Mono', monospace",
+        backdropFilter: 'blur(4px)',
+        transition: 'color 0.2s, border-color 0.2s',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.color = '#e8961c'; e.currentTarget.style.borderColor = '#e8961c'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.color = '#a08840'; e.currentTarget.style.borderColor = 'rgba(160,136,64,0.45)'; }}
+    >
+      <span aria-hidden style={{ fontSize: 12, lineHeight: 1 }}>▤</span>
+      MEGAMIX
+    </button>
+  );
+}
+
+interface MegamixModalProps {
+  megamixes: Megamix[];
+  currentUrl?: string;
+  onSelect: (m: Megamix) => void;
+  onClose: () => void;
+}
+
+function MegamixModal({ megamixes, currentUrl, onSelect, onClose }: MegamixModalProps) {
+  // Close on Escape
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 30,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+        background: 'rgba(0,0,0,0.55)',
+        animation: 'k7-backdrop-in 0.2s ease-out both',
+      }}
+    >
+      {/* Keyframes for the staggered entry animation */}
+      <style>{`
+        @keyframes k7-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes k7-card-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
+        @keyframes k7-row-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+      `}</style>
+
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%',
+          maxWidth: 480,
+          maxHeight: '80vh',
+          background: '#f9faf1',
+          border: '2px solid #202020',
+          borderRadius: 10,
+          boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          fontFamily: '"Barlow Condensed", "Oswald", sans-serif',
+          animation: 'k7-card-in 0.28s ease-out both',
+        }}
+      >
+        {/* Header band — evokes the printed J-card top strip */}
+        <div style={{ display: 'flex', alignItems: 'stretch', borderBottom: '2px solid #202020', flexShrink: 0 }}>
+          <div style={{ flex: 1, padding: '7px 14px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: -0.5, lineHeight: 1, color: '#202020', textTransform: 'uppercase' }}>
+              Megamix Select
+            </div>
+            <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: 1.5, color: '#202020', textTransform: 'uppercase', marginTop: 2 }}>
+              Type&nbsp;I (Normal) Position · Insert a tape
+            </div>
+          </div>
+          {/* Corner colour stripes */}
+          <div style={{ display: 'flex', flexDirection: 'column', width: 74 }}>
+            <div style={{ flex: 1, background: '#f0c419' }} />
+            <div style={{ flex: 1, background: '#e8801c' }} />
+            <div style={{ flex: 1, background: '#c0271e' }} />
+          </div>
+          {/* Close */}
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            style={{ width: 40, border: 'none', borderLeft: '2px solid #202020', background: '#202020', color: '#f9faf1', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Tracklist — handwritten titles on red dotted lines, fading in one by one */}
+        <div style={{ padding: '4px 0', overflowY: 'auto' }}>
+          {megamixes.map((m, i) => {
+            const selected = m.url === currentUrl;
+            return (
+              <button
+                key={m.url}
+                onClick={() => { onSelect(m); onClose(); }}
+                title={m.name}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  width: '100%',
+                  textAlign: 'left',
+                  background: selected ? 'rgba(192,39,30,0.08)' : 'transparent',
+                  border: 'none',
+                  borderTop: i === 0 ? 'none' : '1px dotted rgba(192,39,30,0.6)',
+                  padding: '10px 14px',
+                  cursor: 'pointer',
+                  color: '#202020',
+                  animation: 'k7-row-in 0.32s ease-out both',
+                  animationDelay: `${100 + i * 90}ms`,
+                }}
+              >
+                {/* A-side style marker */}
+                <span
+                  style={{
+                    flexShrink: 0,
+                    width: 16,
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: selected ? '#c0271e' : '#b9b9ad',
+                    fontFamily: '"Barlow Condensed", sans-serif',
+                  }}
+                >
+                  {selected ? '▶' : String(i + 1).padStart(2, '0')}
+                </span>
+                <span
+                  style={{
+                    fontFamily: '"Rock Salt", cursive',
+                    fontSize: 13,
+                    lineHeight: 1.35,
+                    color: '#202020',
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {m.name}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ──────────────────────────────────────────────────────────────
 
 export default function App() {
   const audio = useAudioEngine();
 
-  // Preload the tape that ships in the cassette
+  // Which megamix is loaded in the deck
+  const [currentUrl, setCurrentUrl] = useState(DEFAULT_MEGAMIX?.url);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // Load the default tape on mount
   useEffect(() => {
-    audio.loadUrl(defaultTapeUrl, 'K7 rebirth');
+    if (DEFAULT_MEGAMIX) audio.loadUrl(DEFAULT_MEGAMIX.url, DEFAULT_MEGAMIX.name);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const selectMegamix = useCallback((m: Megamix) => {
+    setCurrentUrl(m.url);
+    audio.loadUrl(m.url, m.name); // loads paused — like inserting a fresh tape
+  }, [audio]);
 
   // Wheel angles — only updated when user drags (no playback animation)
   const [leftAngle, setLeftAngle] = useState(0);
@@ -577,7 +790,7 @@ export default function App() {
   const isMobilePortrait = isMobile && viewport.h > viewport.w;
   const scale = isMobilePortrait
     ? Math.min((viewport.w - PAD) / 662, (viewport.h - PAD) / 1080)
-    : Math.min(1, (viewport.w - PAD) / 1080);
+    : Math.min(1, (viewport.w - PAD) / 1080, (viewport.h - PAD) / 662);
 
   const handleLeftRotate = useCallback((delta: number) => {
     audio.seek(delta * 0.07);
@@ -600,17 +813,23 @@ export default function App() {
         inset: 0,
         height: '100dvh',
         display: 'flex',
-        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'radial-gradient(ellipse at 50% 40%, #18140e 0%, #0b0a08 60%, #060504 100%)',
+        backgroundColor: '#060504',
+        backgroundImage: FABRIC_URL
+          ? `radial-gradient(ellipse at 50% 40%, rgba(6,5,4,0) 0%, rgba(6,5,4,0.6) 100%), url(${FABRIC_URL})`
+          : 'radial-gradient(ellipse at 50% 40%, #18140e 0%, #0b0a08 60%, #060504 100%)',
+        backgroundRepeat: 'no-repeat, repeat',
+        backgroundSize: 'cover, 480px',
         padding: '24px 16px',
-        gap: 28,
         boxSizing: 'border-box',
         overflow: 'hidden',
         touchAction: 'none',
       }}
     >
+      {/* Discreet trigger that opens the megamix modal */}
+      <MegamixTrigger onClick={() => setMenuOpen(true)} />
+
       {/* ── Scaled cassette wrapper (rotates 90° to fill narrow portrait screens) ── */}
       <div
         style={{
@@ -648,7 +867,7 @@ export default function App() {
           <Screws />
 
           {/* Cover with label */}
-          <CoverArea trackName={audio.trackName} />
+          <CoverArea />
 
           {/* Cover outline */}
           <CoverOutline />
@@ -672,13 +891,22 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── Hint (below cassette, unscaled) ── */}
+      {/* Hint (desktop only) */}
       {!isMobile && (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+        <div style={{ position: 'absolute', bottom: 14, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
           <div style={{ color: '#a08840', fontSize: 10, letterSpacing: 3, fontFamily: "'Space Mono', monospace" }}>
             TAP WHEEL CENTERS · LEFT = PLAY/PAUSE · RIGHT = RESET SPEED
           </div>
         </div>
+      )}
+
+      {menuOpen && (
+        <MegamixModal
+          megamixes={MENU_TRACKS}
+          currentUrl={currentUrl}
+          onSelect={selectMegamix}
+          onClose={() => setMenuOpen(false)}
+        />
       )}
     </div>
   );
