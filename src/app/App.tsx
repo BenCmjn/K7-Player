@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { CassetteWheel } from './components/CassetteWheel';
+import { OledCanvas, drawDeckScreen } from './components/OledScreen';
 import svgPaths from '../imports/Cassette/svg-kn4si39m8f';
 import { imgCover } from '../imports/Cassette/svg-58mld';
 import qrNetlify from '../assets/qr-netlify.svg';
@@ -38,9 +39,6 @@ const MEGAMIXES: Megamix[] = Object.entries(audioModules)
 // K7 Rebirth ships as the default tape; fall back to the first one alphabetically.
 const DEFAULT_MEGAMIX: Megamix | undefined =
   MEGAMIXES.find((m) => /rebirth/i.test(m.name)) ?? MEGAMIXES[0];
-
-// Everything except the default is offered in the selector menu.
-const MENU_TRACKS: Megamix[] = MEGAMIXES.filter((m) => m.url !== DEFAULT_MEGAMIX?.url);
 
 const FABRIC_URL: string | undefined = Object.values(textureModules)[0];
 
@@ -198,39 +196,7 @@ function useAudioEngine() {
   return { isPlaying, playbackRate, currentTime, duration, trackName, isLoaded, isScrubbing, volume, togglePlay, seek, setRate, adjustVolume, loadUrl };
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
-
-function fmtTime(s: number) {
-  const m = Math.floor(s / 60);
-  return `${m}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
-}
-
-function rateLabel(r: number) {
-  if (Math.abs(r - 1.0) < 0.03) return 'NORMAL';
-  return r > 1 ? `CHIPMUNK ×${r.toFixed(2)}` : `SLOW ×${r.toFixed(2)}`;
-}
-
-// ─── Waveform bars ─────────────────────────────────────────────────────────
-
-function WaveformBars({ active, color }: { active: boolean; color: string }) {
-  const [heights, setHeights] = useState<number[]>(() => Array(14).fill(15));
-  useEffect(() => {
-    if (!active) { setHeights(Array(14).fill(15)); return; }
-    const id = setInterval(() => {
-      setHeights(prev => prev.map((h) => Math.round(h * 0.4 + (10 + Math.random() * 80) * 0.6)));
-    }, 90);
-    return () => clearInterval(id);
-  }, [active]);
-  return (
-    <div style={{ display: 'flex', gap: 3, alignItems: 'center', height: 22 }}>
-      {heights.map((h, i) => (
-        <div key={i} style={{ width: 3, height: `${h}%`, background: color, borderRadius: 2, opacity: active ? 0.85 : 0.2, transition: 'height 0.09s ease-out' }} />
-      ))}
-    </div>
-  );
-}
-
-// ─── LCD Screen content ────────────────────────────────────────────────────
+// ─── Interactive TapeControls (replaces Figma static TapeControls) ─────────
 
 interface LCDProps {
   isLoaded: boolean;
@@ -243,60 +209,6 @@ interface LCDProps {
   volume: number;
   volumeActive: boolean;
 }
-
-function LCDContent({ isLoaded, isPlaying, isScrubbing, currentTime, duration, playbackRate, trackName, volume, volumeActive }: LCDProps) {
-  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
-  const rateColor = playbackRate > 1.05 ? '#f0a030' : playbackRate < 0.95 ? '#60c8ff' : '#2aff7a';
-
-  if (!isLoaded) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-        <p style={{ color: '#1a5025', fontSize: 28, letterSpacing: 4, margin: 0, fontFamily: "'VT323', monospace" }}>NO SIGNAL</p>
-        <p style={{ color: '#1a5025', fontSize: 16, letterSpacing: 3, margin: 0, opacity: 0.7, fontFamily: "'VT323', monospace" }}>LOAD A TAPE ▼</p>
-        <div style={{ color: '#1a5025', fontSize: 11, opacity: 0.4, letterSpacing: 2, fontFamily: "'Space Mono', monospace", textAlign: 'center', lineHeight: 1.6 }}>
-          <div>.MP3  .WAV  .OGG</div>
-          <div>.M4A  .AAC  .FLAC</div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, width: '100%' }}>
-      {/* Track name */}
-      <div style={{ color: '#1a8040', fontSize: 11, letterSpacing: 2, fontFamily: "'Space Mono', monospace", textAlign: 'center', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {trackName}
-      </div>
-      {/* Status */}
-      <div style={{ color: isScrubbing ? '#f0a030' : isPlaying ? '#2aff7a' : '#1a6030', fontSize: 14, letterSpacing: 3, fontFamily: "'VT323', monospace" }}>
-        {isScrubbing ? '⟨⟨ SCRUB ⟩⟩' : isPlaying ? '▶ PLAY' : '⏸ PAUSE'}
-      </div>
-      {/* Time */}
-      <div style={{ color: '#2aff7a', fontSize: 28, lineHeight: 1, letterSpacing: 2, textShadow: '0 0 10px rgba(42,255,122,0.45)', fontFamily: "'VT323', monospace" }}>
-        {fmtTime(currentTime)}
-        <span style={{ color: '#1a6030', fontSize: 18 }}> / {fmtTime(duration)}</span>
-      </div>
-      {/* Progress bar */}
-      <div style={{ width: '100%', height: 4, background: '#0a2010', borderRadius: 2, overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${progress}%`, background: 'linear-gradient(90deg,#1aaa50,#2aff7a)', borderRadius: 2, transition: 'width 0.08s linear' }} />
-      </div>
-      {/* Rate — or a transient volume readout while adjusting */}
-      {volumeActive ? (
-        <div style={{ color: '#f0a030', fontSize: 13, letterSpacing: 2, fontFamily: "'VT323', monospace", textShadow: '0 0 6px #f0a03055' }}>
-          VOL {'▮'.repeat(Math.round(volume * 10))}{'▯'.repeat(10 - Math.round(volume * 10))} {Math.round(volume * 100)}%
-        </div>
-      ) : (
-        <div style={{ color: rateColor, fontSize: 13, letterSpacing: 3, fontFamily: "'VT323', monospace", textShadow: `0 0 6px ${rateColor}55` }}>
-          {rateLabel(playbackRate)}
-        </div>
-      )}
-      {/* Waveform */}
-      <WaveformBars active={isPlaying && !isScrubbing} color="#2aff7a" />
-    </div>
-  );
-}
-
-// ─── Interactive TapeControls (replaces Figma static TapeControls) ─────────
 
 interface TapeControlsProps extends LCDProps {
   leftAngle: number;
@@ -332,30 +244,30 @@ function InteractiveTapeControls(props: TapeControlsProps) {
         onHoldChange={onLeftHoldChange}
       />
 
-      {/* LCD Screen */}
+      {/* OLED viewing window — like the little cutout in a real cassette shell that
+          let you see the magnetic tape spooling, this is a small window (7 × 21mm
+          real-world at this cassette's 100mm width) cut into the white plastic,
+          centered between the wheels with the OLED mounted behind it. The 128×32
+          active pixel area (22.38 × 5.58mm on the datasheet) is centered on the
+          same point — since it's wider than this window, its far left/right edges
+          are cropped by the plastic; since it's shorter, a black band shows above
+          and below, both exactly as a real narrower-than-the-panel cutout would. */}
       <div
-        className="-translate-y-1/2 absolute rounded-[7px]"
+        className="-translate-y-1/2 absolute"
         style={{
-          left: 207,
-          right: 207,
+          left: 203.6,
+          right: 203.6,
           top: '50%',
-          height: 148,
-          background: '#060e07',
-          border: '2px solid #0a1c0c',
-          boxShadow: 'inset 0 3px 10px rgba(0,0,0,0.8), 0 0 20px rgba(51,255,122,0.06)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '10px 12px',
+          aspectRatio: '21 / 7',
+          borderRadius: 3,
+          background: '#000',
+          border: '2px solid #141414',
+          boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.9), 0 1px 0 rgba(255,255,255,0.04), 0 0 10px rgba(47,224,255,0.35), 0 0 24px rgba(47,224,255,0.15)',
           overflow: 'hidden',
         }}
       >
-        {/* Scanlines */}
-        <div style={{ position: 'absolute', inset: 0, backgroundImage: 'repeating-linear-gradient(0deg,rgba(0,0,0,0.16) 0px,rgba(0,0,0,0.16) 1px,transparent 1px,transparent 3px)', pointerEvents: 'none', zIndex: 2 }} />
-        {/* Glare */}
-        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '35%', background: 'linear-gradient(180deg,rgba(255,255,255,0.03) 0%,transparent 100%)', pointerEvents: 'none', zIndex: 2 }} />
-        <div style={{ position: 'relative', zIndex: 3, width: '100%' }}>
-          <LCDContent {...lcdProps} />
+        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 241.7, height: 60.26 }}>
+          <OledCanvas draw={(ctx) => drawDeckScreen(ctx, lcdProps)} />
         </div>
       </div>
 
@@ -1330,7 +1242,7 @@ export default function App() {
 
       {menuOpen && (
         <MegamixModal
-          megamixes={MENU_TRACKS}
+          megamixes={MEGAMIXES}
           currentUrl={currentUrl}
           onSelect={selectMegamix}
           onClose={() => setMenuOpen(false)}
