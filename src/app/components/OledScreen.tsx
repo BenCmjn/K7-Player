@@ -7,8 +7,6 @@ import { useEffect, useRef } from 'react';
 export const OLED_W = 128;
 export const OLED_H = 32;
 
-// Matches the real AZDelivery panel: cyan-blue with a photographed bloom/glow.
-export const OLED_COLOR = '#2FE0FF';
 // Per-pixel bloom radius, in native 128×32 canvas px (scales up with the canvas).
 const GLOW_BLUR = 1.4;
 
@@ -63,11 +61,43 @@ const FONT: Record<string, Glyph> = {
   'X': ['#...#', '#...#', '.#.#.', '..#..', '.#.#.', '#...#', '#...#'],
   'Y': ['#...#', '#...#', '.#.#.', '..#..', '..#..', '..#..', '..#..'],
   'Z': ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
+  '<': ['....#', '...#.', '..#..', '.#...', '..#..', '...#.', '....#'],
+  '>': ['#....', '.#...', '..#..', '...#.', '..#..', '.#...', '#....'],
+  'a': ['.....', '.....', '.###.', '....#', '.####', '#...#', '.####'],
+  'b': ['#....', '#....', '####.', '#...#', '#...#', '#...#', '####.'],
+  'c': ['.....', '.....', '.###.', '#....', '#....', '#....', '.###.'],
+  'd': ['....#', '....#', '.####', '#...#', '#...#', '#...#', '.####'],
+  'e': ['.....', '.....', '.###.', '#...#', '#####', '#....', '.###.'],
+  'f': ['..##.', '.#...', '.#...', '####.', '.#...', '.#...', '.#...'],
+  'g': ['.....', '.....', '.####', '#...#', '.####', '....#', '.###.'],
+  'h': ['#....', '#....', '####.', '#...#', '#...#', '#...#', '#...#'],
+  'i': ['..#..', '.....', '..#..', '..#..', '..#..', '..#..', '..#..'],
+  'j': ['...#.', '.....', '...#.', '...#.', '...#.', '#..#.', '.##..'],
+  'k': ['#....', '#....', '#..#.', '#.#..', '##...', '#.#..', '#..#.'],
+  'l': ['.#...', '.#...', '.#...', '.#...', '.#...', '.#...', '..##.'],
+  'm': ['.....', '.....', '##.#.', '#.#.#', '#.#.#', '#...#', '#...#'],
+  'n': ['.....', '.....', '#.##.', '##..#', '#...#', '#...#', '#...#'],
+  'o': ['.....', '.....', '.###.', '#...#', '#...#', '#...#', '.###.'],
+  'p': ['.....', '.....', '####.', '#...#', '####.', '#....', '#....'],
+  'q': ['.....', '.....', '.####', '#...#', '.####', '....#', '....#'],
+  'r': ['.....', '.....', '#.##.', '##..#', '#....', '#....', '#....'],
+  's': ['.....', '.....', '.####', '#....', '.###.', '....#', '####.'],
+  't': ['.#...', '.#...', '####.', '.#...', '.#...', '.#...', '..##.'],
+  'u': ['.....', '.....', '#...#', '#...#', '#...#', '#...#', '.####'],
+  'v': ['.....', '.....', '#...#', '#...#', '#...#', '.#.#.', '..#..'],
+  'w': ['.....', '.....', '#...#', '#...#', '#.#.#', '#.#.#', '.#.#.'],
+  'x': ['.....', '.....', '#...#', '.#.#.', '..#..', '.#.#.', '#...#'],
+  'y': ['.....', '.....', '#...#', '#...#', '.####', '....#', '.###.'],
+  'z': ['.....', '.....', '#####', '...#.', '..#..', '.#...', '#####'],
 };
 
 const GLYPH_W = 5;
 const GLYPH_H = 7;
 const ADVANCE = GLYPH_W + 1; // 1px letter-spacing
+
+function glyphFor(ch: string): Glyph {
+  return FONT[ch] ?? FONT[ch.toUpperCase()] ?? FONT[ch.toLowerCase()] ?? FONT[' '];
+}
 
 function drawGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, glyph: Glyph, scale: number) {
   for (let row = 0; row < GLYPH_H; row++) {
@@ -82,22 +112,13 @@ export function textWidth(text: string, scale = 1) {
   return text.length > 0 ? (text.length * ADVANCE - 1) * scale : 0;
 }
 
+/** Draws `text` respecting its exact case (this font has distinct upper/lower glyphs). */
 export function drawText(ctx: CanvasRenderingContext2D, x: number, y: number, text: string, scale = 1) {
   let cx = x;
-  for (const ch of text.toUpperCase()) {
-    drawGlyph(ctx, cx, y, FONT[ch] ?? FONT[' '], scale);
+  for (const ch of text) {
+    drawGlyph(ctx, cx, y, glyphFor(ch), scale);
     cx += ADVANCE * scale;
   }
-}
-
-/** A 1-bit progress/level bar: hollow outline with a proportional solid fill. */
-export function drawBar(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, frac: number) {
-  ctx.fillRect(x, y, w, 1);
-  ctx.fillRect(x, y + h - 1, w, 1);
-  ctx.fillRect(x, y, 1, h);
-  ctx.fillRect(x + w - 1, y, 1, h);
-  const innerW = Math.max(0, Math.round((w - 2) * Math.max(0, Math.min(1, frac))));
-  if (innerW > 0) ctx.fillRect(x + 1, y + 1, innerW, h - 2);
 }
 
 // ─── Canvas host: native 128×32 buffer, scaled crisply via CSS ─────────────
@@ -136,29 +157,42 @@ export function OledCanvas({ draw }: OledCanvasProps) {
   );
 }
 
-// ─── The actual screen content (v1: play/pause deck) ───────────────────────
+// ─── Screen content — matches the Figma design system exactly ─────────────
+// Two families, driven by which state the deck is in:
+//  · Idle (Pause / Playing / Volume) — dark ink bg, cyan text, glowing like a
+//    real lit OLED.
+//  · Wheel touch (Chipmunk / Slow / Normal / Scrub fwd+bwd) — inverted: solid
+//    cyan bg, dark text. This is still 1-bit-accurate: a monochrome OLED can
+//    invert which pixels are "on" just as easily, it's just most of the panel
+//    lit instead of most of it dark — so no glow here, the bloom would be
+//    indistinguishable from the fill itself.
 
-export interface OledDeckState {
-  isLoaded: boolean;
-  isPlaying: boolean;
-  isScrubbing: boolean;
+export const INK = '#06090e';
+export const CYAN = '#00e4ff';
+
+export type OledScreenMode =
+  | 'pause'
+  | 'playing'
+  | 'volume'
+  | 'chipmunk'
+  | 'slow'
+  | 'normal-speed'
+  | 'scrub-bwd'
+  | 'scrub-fwd';
+
+export interface OledScreenState {
+  mode: OledScreenMode;
+  trackName: string;
   currentTime: number;
   duration: number;
   playbackRate: number;
-  trackName: string;
-  volume: number;
-  volumeActive: boolean;
+  volume: number; // 0..1
 }
 
 function fmtTimeOled(s: number) {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
   return `${m}:${sec.toString().padStart(2, '0')}`;
-}
-
-function rateLabelOled(r: number) {
-  if (Math.abs(r - 1) < 0.03) return 'NORMAL';
-  return r > 1 ? `CHIPMUNK X${r.toFixed(2)}` : `SLOW X${r.toFixed(2)}`;
 }
 
 /** Draws `text` horizontally centered in the full 128px width. */
@@ -170,56 +204,120 @@ const MARQUEE_SPEED = 14; // canvas px/second — a slow, readable crawl
 const MARQUEE_GAP = 20;   // blank px between loops
 
 /**
- * Centers `text` if it fits in the visible width; otherwise scrolls it
- * right-to-left forever. The physical viewing window is narrower than the
- * full 128px panel (it crops the outer edges), so a slow crawl — not a
- * hard truncation — is how a real device would let you read a long title.
+ * Centers `text` if it fits; otherwise scrolls it forever (default
+ * right-to-left, or left-to-right when `reverse` is set — used to make the
+ * scrub arrows visually flow the same way the tape is moving). The physical
+ * viewing window is narrower than the full 128px panel, so a slow crawl —
+ * not a hard truncation — is how a real device would let you read the rest.
  */
-export function drawMarquee(ctx: CanvasRenderingContext2D, y: number, text: string) {
-  const w = textWidth(text);
+export function drawMarquee(ctx: CanvasRenderingContext2D, y: number, text: string, scale = 1, reverse = false) {
+  const w = textWidth(text, scale);
   if (w <= OLED_W) {
-    drawText(ctx, Math.round((OLED_W - w) / 2), y, text);
+    drawText(ctx, Math.round((OLED_W - w) / 2), y, text, scale);
     return;
   }
   const period = w + MARQUEE_GAP;
-  const offset = ((performance.now() / 1000) * MARQUEE_SPEED) % period;
+  const t = ((performance.now() / 1000) * MARQUEE_SPEED) % period;
+  const offset = reverse ? period - t : t;
   const x = Math.round(-offset);
-  drawText(ctx, x, y, text);
-  if (x + period < OLED_W) drawText(ctx, x + period, y, text);
+  drawText(ctx, x, y, text, scale);
+  if (x + period < OLED_W) drawText(ctx, x + period, y, text, scale);
+  if (x - period + OLED_W > 0) drawText(ctx, x - period, y, text, scale);
 }
 
-export function drawDeckScreen(ctx: CanvasRenderingContext2D, s: OledDeckState, color: string = OLED_COLOR) {
-  ctx.fillStyle = color;
-  ctx.shadowColor = color;
-  ctx.shadowBlur = GLOW_BLUR;
+/** Always-scrolling marquee (no centered/static fallback) — used for the
+ * scrub screens' arrow row, which should read as continuous tape motion. */
+function drawScrollingArrows(ctx: CanvasRenderingContext2D, y: number, text: string, reverse: boolean) {
+  const w = textWidth(text);
+  const period = w + MARQUEE_GAP;
+  const t = ((performance.now() / 1000) * MARQUEE_SPEED) % period;
+  const offset = reverse ? period - t : t;
+  const x = Math.round(-offset);
+  drawText(ctx, x, y, text);
+  drawText(ctx, x + period, y, text);
+  if (x - period + OLED_W > 0) drawText(ctx, x - period, y, text);
+}
 
-  if (!s.isLoaded) {
-    drawCentered(ctx, 4, 'NO SIGNAL');
-    drawCentered(ctx, 18, 'LOAD A TAPE');
-    return;
+function drawVolumeBars(ctx: CanvasRenderingContext2D, volume: number) {
+  const y = 26;
+  const h = 4;
+  const gap = 15; // half-gap from center reserved for the % readout
+  const maxLen = 34;
+  const len = Math.round(2 + Math.max(0, Math.min(1, volume)) * maxLen);
+  const cx = OLED_W / 2;
+  ctx.fillRect(Math.round(cx - gap - len), y, len, h);
+  ctx.fillRect(Math.round(cx + gap), y, len, h);
+}
+
+export function drawOledScreen(ctx: CanvasRenderingContext2D, s: OledScreenState) {
+  const touch = s.mode !== 'pause' && s.mode !== 'playing' && s.mode !== 'volume';
+  const bg = touch ? CYAN : INK;
+  const fg = touch ? INK : CYAN;
+
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, OLED_W, OLED_H);
+  ctx.fillStyle = fg;
+  if (!touch) {
+    // Only the idle family glows — it's the one where most of the panel is unlit.
+    ctx.shadowColor = fg;
+    ctx.shadowBlur = GLOW_BLUR;
+  } else {
+    ctx.shadowBlur = 0;
   }
 
-  // Row 1 — track name: centered, or a slow marquee if it's too long
-  drawMarquee(ctx, 0, s.trackName || 'UNKNOWN');
+  const track = s.trackName || 'Unknown';
+  const time = `${fmtTimeOled(s.currentTime)}/${fmtTimeOled(s.duration)}`;
 
-  // Row 2 — status + time, centered
-  const status = s.isScrubbing ? 'SCRUB' : s.isPlaying ? 'PLAY' : 'PAUSE';
-  drawCentered(ctx, 9, `${status} ${fmtTimeOled(s.currentTime)}/${fmtTimeOled(s.duration)}`);
-
-  // Row 3 — progress bar (full width by design — a bar's edge isn't a legibility issue)
-  const frac = s.duration > 0 ? s.currentTime / s.duration : 0;
-  drawBar(ctx, 0, 18, OLED_W, 4, frac);
-
-  // Row 4 — rate label, or a transient volume readout while adjusting — centered as a group
-  if (s.volumeActive) {
-    const label = 'VOL';
-    const barW = 70;
-    const gap = 4;
-    const groupW = textWidth(label) + gap + barW;
-    const x = Math.round((OLED_W - groupW) / 2);
-    drawText(ctx, x, 24, label);
-    drawBar(ctx, x + textWidth(label) + gap, 25, barW, 6, s.volume);
-  } else {
-    drawCentered(ctx, 24, rateLabelOled(s.playbackRate));
+  switch (s.mode) {
+    case 'pause': {
+      drawMarquee(ctx, 0, track);
+      drawCentered(ctx, 9, 'Pause!', 2);
+      drawCentered(ctx, 25, time);
+      break;
+    }
+    case 'playing': {
+      const showRate = Math.abs(s.playbackRate - 1) > 0.03;
+      if (showRate) {
+        const label = `x${s.playbackRate.toFixed(2)}`;
+        drawText(ctx, 2, 0, label);
+        drawText(ctx, OLED_W - 2 - textWidth(label), 0, label);
+      }
+      drawCentered(ctx, 0, 'Playing');
+      drawMarquee(ctx, 9, track, 2);
+      drawCentered(ctx, 25, time);
+      break;
+    }
+    case 'volume': {
+      drawMarquee(ctx, 0, track);
+      drawCentered(ctx, 9, 'Volume', 2);
+      drawCentered(ctx, 25, `${Math.round(s.volume * 100)}%`);
+      drawVolumeBars(ctx, s.volume);
+      break;
+    }
+    case 'chipmunk': {
+      drawCentered(ctx, 2, `x${s.playbackRate.toFixed(2)}`, 3);
+      drawCentered(ctx, 25, 'Chipmunk!!');
+      break;
+    }
+    case 'slow': {
+      drawCentered(ctx, 2, `x${s.playbackRate.toFixed(2)}`, 3);
+      drawCentered(ctx, 25, 'Slow!');
+      break;
+    }
+    case 'normal-speed': {
+      drawCentered(ctx, 2, 'NormaL', 3);
+      drawCentered(ctx, 25, 'speed');
+      break;
+    }
+    case 'scrub-bwd': {
+      drawCentered(ctx, 3, 'Backward!', 2);
+      drawScrollingArrows(ctx, 23, '<<<<<<<< scrubing <<<<<<<<', true);
+      break;
+    }
+    case 'scrub-fwd': {
+      drawCentered(ctx, 3, 'Forward!', 2);
+      drawScrollingArrows(ctx, 23, '>>>>>>>> scrubing >>>>>>>>', false);
+      break;
+    }
   }
 }

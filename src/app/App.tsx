@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { CassetteWheel } from './components/CassetteWheel';
-import { OledCanvas, drawDeckScreen } from './components/OledScreen';
+import { OledCanvas, drawOledScreen, type OledScreenMode } from './components/OledScreen';
 import svgPaths from '../imports/Cassette/svg-kn4si39m8f';
 import { imgCover } from '../imports/Cassette/svg-58mld';
 import qrNetlify from '../assets/qr-netlify.svg';
@@ -198,19 +198,16 @@ function useAudioEngine() {
 
 // ─── Interactive TapeControls (replaces Figma static TapeControls) ─────────
 
-interface LCDProps {
-  isLoaded: boolean;
-  isPlaying: boolean;
-  isScrubbing: boolean;
+interface OledProps {
+  mode: OledScreenMode;
   currentTime: number;
   duration: number;
   playbackRate: number;
   trackName: string;
   volume: number;
-  volumeActive: boolean;
 }
 
-interface TapeControlsProps extends LCDProps {
+interface TapeControlsProps extends OledProps {
   leftAngle: number;
   rightAngle: number;
   onLeftRotate: (delta: number) => void;
@@ -223,7 +220,7 @@ interface TapeControlsProps extends LCDProps {
 }
 
 function InteractiveTapeControls(props: TapeControlsProps) {
-  const { leftAngle, rightAngle, onLeftRotate, onRightRotate, onLeftCenter, onRightCenter, leftPressed, rightPressed, onLeftHoldChange, ...lcdProps } = props;
+  const { leftAngle, rightAngle, onLeftRotate, onRightRotate, onLeftCenter, onRightCenter, leftPressed, rightPressed, onLeftHoldChange, ...oledState } = props;
   return (
     <div
       className="absolute overflow-clip rounded-[88px]"
@@ -267,7 +264,7 @@ function InteractiveTapeControls(props: TapeControlsProps) {
         }}
       >
         <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 241.7, height: 60.26 }}>
-          <OledCanvas draw={(ctx) => drawDeckScreen(ctx, lcdProps)} />
+          <OledCanvas draw={(ctx) => drawOledScreen(ctx, oledState)} />
         </div>
       </div>
 
@@ -944,8 +941,15 @@ export default function App() {
     if (held) leftComboUsedRef.current = false;
     setLeftHeldTouch(held);
   }, []);
-  const [volumeActive, setVolumeActive] = useState(false);
-  const volumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // OLED screen mode: defaults to playing/pause, but a wheel touch (mouse,
+  // touch, or keyboard) shows its feedback screen for 1s, then reverts.
+  const [transientMode, setTransientMode] = useState<OledScreenMode | null>(null);
+  const transientTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const triggerTransient = useCallback((mode: OledScreenMode) => {
+    setTransientMode(mode);
+    if (transientTimer.current) clearTimeout(transientTimer.current);
+    transientTimer.current = setTimeout(() => setTransientMode(null), 1000);
+  }, []);
 
   // Load the default tape on mount
   useEffect(() => {
@@ -989,35 +993,37 @@ export default function App() {
     setManualScale((s) => Math.max(0.15, Math.min(1.15, (s ?? REAL_SCALE) * factor)));
   }, []);
 
-  const pingVolume = useCallback(() => {
-    setVolumeActive(true);
-    if (volumeTimer.current) clearTimeout(volumeTimer.current);
-    volumeTimer.current = setTimeout(() => setVolumeActive(false), 1100);
-  }, []);
-
   const handleLeftRotate = useCallback((delta: number) => {
     // Holding the left wheel down is the volume modifier — don't also scrub while held.
     if (leftHeld) return;
     audio.seek(delta * 0.07);
     setLeftAngle(a => a + delta); // only visual, only on drag
-  }, [audio, leftHeld]);
+    triggerTransient(delta > 0 ? 'scrub-fwd' : 'scrub-bwd');
+  }, [audio, leftHeld, triggerTransient]);
 
   const handleRightRotate = useCallback((delta: number) => {
     if (leftHeld) {
       // Left held (keyboard A, touch, or mouse) + right wheel drag/scroll → volume
       audio.adjustVolume(delta * 0.004);
-      pingVolume();
+      triggerTransient('volume');
       leftComboUsedRef.current = true; // suppress the left tap-to-toggle-play once released
     } else {
-      audio.setRate(audio.playbackRate + delta * 0.012);
+      const nextRate = Math.max(0.25, Math.min(4.0, audio.playbackRate + delta * 0.012));
+      audio.setRate(nextRate);
+      triggerTransient(Math.abs(nextRate - 1) < 0.03 ? 'normal-speed' : nextRate > 1 ? 'chipmunk' : 'slow');
     }
     setRightAngle(a => a + delta); // only visual, only on drag
-  }, [audio, leftHeld, pingVolume]);
+  }, [audio, leftHeld, triggerTransient]);
 
   const handleLeftCenterClick = useCallback(() => {
     if (leftComboUsedRef.current) { leftComboUsedRef.current = false; return; }
     audio.togglePlay();
   }, [audio]);
+
+  const handleRightCenterClick = useCallback(() => {
+    audio.setRate(1.0);
+    triggerTransient('normal-speed');
+  }, [audio, triggerTransient]);
 
   // Latest callbacks, read by the (mounted-once) keyboard listener
   const latest = useRef({
@@ -1026,9 +1032,9 @@ export default function App() {
     rotateRight: handleRightRotate,
     spinRight: setRightAngle,
     togglePlay: audio.togglePlay,
-    resetRate: () => audio.setRate(1.0),
+    resetRate: handleRightCenterClick,
     adjustVolume: audio.adjustVolume,
-    pingVolume,
+    triggerTransient,
   });
   latest.current = {
     menuOpen: menuOpen || guideOpen,
@@ -1036,9 +1042,9 @@ export default function App() {
     rotateRight: handleRightRotate,
     spinRight: setRightAngle,
     togglePlay: audio.togglePlay,
-    resetRate: () => audio.setRate(1.0),
+    resetRate: handleRightCenterClick,
     adjustVolume: audio.adjustVolume,
-    pingVolume,
+    triggerTransient,
   };
 
   // ── Keyboard controls ──────────────────────────────────────────────
@@ -1061,11 +1067,11 @@ export default function App() {
       if (held.has('ArrowLeft')) { if (aDown) aCombo = true; else c.rotateLeft(-ROT); }
       if (held.has('ArrowRight')) { if (aDown) aCombo = true; else c.rotateLeft(ROT); }
       if (held.has('ArrowUp')) {
-        if (aDown) { c.adjustVolume(VOL); c.spinRight((a) => a + ROT); c.pingVolume(); aCombo = true; }
+        if (aDown) { c.adjustVolume(VOL); c.spinRight((a) => a + ROT); c.triggerTransient('volume'); aCombo = true; }
         else c.rotateRight(ROT);
       }
       if (held.has('ArrowDown')) {
-        if (aDown) { c.adjustVolume(-VOL); c.spinRight((a) => a - ROT); c.pingVolume(); aCombo = true; }
+        if (aDown) { c.adjustVolume(-VOL); c.spinRight((a) => a - ROT); c.triggerTransient('volume'); aCombo = true; }
         else c.rotateRight(-ROT);
       }
     };
@@ -1126,6 +1132,8 @@ export default function App() {
       if (timer) clearInterval(timer);
     };
   }, []);
+
+  const oledMode: OledScreenMode = transientMode ?? (audio.isPlaying ? 'playing' : 'pause');
 
   // Natural cassette dimensions from Figma
   const CW = 1080;
@@ -1223,19 +1231,16 @@ export default function App() {
             onLeftRotate={handleLeftRotate}
             onRightRotate={handleRightRotate}
             onLeftCenter={handleLeftCenterClick}
-            onRightCenter={() => audio.setRate(1.0)}
+            onRightCenter={handleRightCenterClick}
             leftPressed={leftPressed}
             rightPressed={rightPressed}
             onLeftHoldChange={handleLeftHoldChange}
-            isLoaded={audio.isLoaded}
-            isPlaying={audio.isPlaying}
-            isScrubbing={audio.isScrubbing}
+            mode={oledMode}
             currentTime={audio.currentTime}
             duration={audio.duration}
             playbackRate={audio.playbackRate}
             trackName={audio.trackName}
             volume={audio.volume}
-            volumeActive={volumeActive}
           />
         </div>
       </div>
