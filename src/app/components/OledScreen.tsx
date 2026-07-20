@@ -225,17 +225,25 @@ export function drawMarquee(ctx: CanvasRenderingContext2D, y: number, text: stri
   if (x - period + OLED_W > 0) drawText(ctx, x - period, y, text, scale);
 }
 
+// Scrub arrows shuttle fast, with a velocity that peaks at each loop boundary
+// and eases through the middle — a rhythmic "fast-forward" pulse. easePulse
+// maps a 0..1 phase to 0..1 travel with e(0)=0, e(1)=1 and speed highest at
+// the ends, so the wrap between loops stays velocity-continuous (no jerk).
+const SCRUB_CYCLE = 0.4;  // seconds for the arrows to travel one full period
+const SCRUB_EASE = 0.9;   // 0..1 pulse strength (0 = constant speed)
+function easePulse(p: number) {
+  return p + (SCRUB_EASE / (2 * Math.PI)) * Math.sin(2 * Math.PI * p);
+}
+
 /** Always-scrolling marquee (no centered/static fallback) — used for the
  * scrub screens' arrow row, which should read as continuous tape motion. */
 function drawScrollingArrows(ctx: CanvasRenderingContext2D, y: number, text: string, reverse: boolean) {
-  const w = textWidth(text);
-  const period = w + MARQUEE_GAP;
-  const t = ((performance.now() / 1000) * MARQUEE_SPEED) % period;
-  const offset = reverse ? period - t : t;
-  const x = Math.round(-offset);
-  drawText(ctx, x, y, text);
-  drawText(ctx, x + period, y, text);
-  if (x - period + OLED_W > 0) drawText(ctx, x - period, y, text);
+  const period = textWidth(text) + MARQUEE_GAP;
+  const raw = (performance.now() / (1000 * SCRUB_CYCLE)) % 1;
+  const frac = reverse ? 1 - easePulse(raw) : easePulse(raw);
+  let x = Math.round(-frac * period);
+  x = ((x % period) + period) % period - period; // normalize into (-period, 0]
+  for (let px = x; px < OLED_W; px += period) drawText(ctx, px, y, text);
 }
 
 function drawVolumeBars(ctx: CanvasRenderingContext2D, volume: number) {
@@ -311,12 +319,12 @@ export function drawOledScreen(ctx: CanvasRenderingContext2D, s: OledScreenState
     }
     case 'scrub-bwd': {
       drawCentered(ctx, 3, 'Backward!', 2);
-      drawScrollingArrows(ctx, 23, '<<<<<<<< scrubing <<<<<<<<', true);
+      drawScrollingArrows(ctx, 23, '<<<<<<<< scrubing <<<<<<<<', false);
       break;
     }
     case 'scrub-fwd': {
       drawCentered(ctx, 3, 'Forward!', 2);
-      drawScrollingArrows(ctx, 23, '>>>>>>>> scrubing >>>>>>>>', false);
+      drawScrollingArrows(ctx, 23, '>>>>>>>> scrubing >>>>>>>>', true);
       break;
     }
   }
