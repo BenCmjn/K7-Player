@@ -1,0 +1,220 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>K7 bake</title>
+<style>
+  @font-face { font-family:"04b03"; src:url("./04b03.ttf"); }
+  body { background:#111; color:#0f0; font:12px monospace; margin:0; padding:12px; }
+  canvas { image-rendering:pixelated; background:#000; margin:2px; }
+  #status { color:#ff0; white-space:pre; }
+  .lbl { color:#8cf; margin-top:10px; }
+</style>
+<div id="status">working…</div>
+<button id="save" style="font:14px monospace;padding:6px 12px;margin:6px 0;">Generate + save TS modules</button>
+<div id="saved" style="color:#6f6;white-space:pre"></div>
+<div class="lbl">FONT preview (6x):</div>
+<canvas id="fontprev" width="900" height="220"></canvas>
+<div class="lbl">WORDS preview (icon@1x + text): play! / pause / volume / Hello! / normal / x2.40 / first entry</div>
+<canvas id="words" width="520" height="260"></canvas>
+<div class="lbl">ICONS preview (6x):</div>
+<canvas id="iconprev" width="900" height="180"></canvas>
+
+<script>
+const SF = 8;                 // supersample factor
+const DESIGN = 8;             // 04b03 native em px
+const CELL_H = 10;            // rows captured per glyph (covers descenders)
+const A_THRESH = 64;
+
+// characters: printable ASCII + curly apostrophe
+const CHARS = [];
+for (let c = 0x20; c <= 0x7e; c++) CHARS.push(String.fromCharCode(c));
+CHARS.push('’');
+
+const ICONS = ['music','coffee','volume','volume-1','volume-2','volume-3',
+  'battery','battery-low','battery-medium','battery-full',
+  'speed-fast','speed-medium','speed-slow','robot-face-happy'];
+
+function bakeFont() {
+  const cv = document.createElement('canvas');
+  cv.width = 32 * SF; cv.height = CELL_H * SF;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.font = (DESIGN * SF) + 'px "04b03"';
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+
+  const glyphs = {};
+  for (const ch of CHARS) {
+    const adv = Math.round(ctx.measureText(ch).width / SF);
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(ch, 0, 0);
+    const w = Math.max(adv, 0);
+    const sampleW = Math.max(w, 1);
+    const img = ctx.getImageData(0, 0, cv.width, cv.height).data;
+    const rows = [];
+    for (let ry = 0; ry < CELL_H; ry++) {
+      let line = '';
+      for (let rx = 0; rx < sampleW; rx++) {
+        const px = Math.floor(rx * SF + SF / 2);
+        const py = Math.floor(ry * SF + SF / 2);
+        const a = img[(py * cv.width + px) * 4 + 3];
+        line += a > A_THRESH ? '#' : '.';
+      }
+      rows.push(line);
+    }
+    glyphs[ch] = { w, rows };
+  }
+  return glyphs;
+}
+
+function loadImg(url) {
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = rej;
+    im.src = url;
+  });
+}
+
+async function bakeIcons() {
+  const out = {};
+  for (const name of ICONS) {
+    const txt = await (await fetch('./svg/' + name + '.svg')).text();
+    const url = 'data:image/svg+xml;base64,' + btoa(txt);
+    const im = await loadImg(url);
+    const cv = document.createElement('canvas');
+    cv.width = 24; cv.height = 24;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, 24, 24);
+    ctx.drawImage(im, 0, 0, 24, 24);
+    const img = ctx.getImageData(0, 0, 24, 24).data;
+    const rows = [];
+    for (let y = 0; y < 24; y++) {
+      let line = '';
+      for (let x = 0; x < 24; x++) {
+        const a = img[(y * 24 + x) * 4 + 3];
+        line += a > A_THRESH ? '#' : '.';
+      }
+      rows.push(line);
+    }
+    out[name] = rows;
+  }
+  return out;
+}
+
+// ---- previews ----
+function drawGlyphAt(ctx, g, x, y, s, color) {
+  ctx.fillStyle = color;
+  for (let ry = 0; ry < g.rows.length; ry++)
+    for (let rx = 0; rx < g.rows[ry].length; rx++)
+      if (g.rows[ry][rx] === '#') ctx.fillRect(x + rx * s, y + ry * s, s, s);
+}
+function drawWord(ctx, glyphs, text, x, y, s, color) {
+  let cx = x;
+  for (const ch of text) {
+    const g = glyphs[ch] || glyphs[' '];
+    drawGlyphAt(ctx, g, cx, y, s, color);
+    cx += (g.w + 1) * s;
+  }
+  return cx;
+}
+
+(async () => {
+  await document.fonts.load((DESIGN*SF)+'px "04b03"');
+  await document.fonts.ready;
+  const glyphs = bakeFont();
+  const icons = await bakeIcons();
+  window.__BAKE__ = { glyphs, icons, cellH: CELL_H };
+
+  // font atlas
+  const fp = document.getElementById('fontprev').getContext('2d');
+  fp.fillStyle = '#000'; fp.fillRect(0,0,900,220);
+  let x = 4, y = 4; const s = 6;
+  for (const ch of CHARS) {
+    const g = glyphs[ch];
+    drawGlyphAt(fp, g, x, y, s, '#0ff');
+    x += (Math.max(g.w,3) + 2) * s;
+    if (x > 860) { x = 4; y += (CELL_H + 2) * s; }
+  }
+
+  // words with icon
+  const wc = document.getElementById('words').getContext('2d');
+  wc.fillStyle = '#000'; wc.fillRect(0,0,520,260);
+  const rows = [['music','play!'],['coffee','pause'],['volume-2','volume'],
+    ['robot-face-happy','Hello!'],['speed-medium','normal'],['speed-fast','x2.40']];
+  let yy = 4; const S2 = 3;
+  for (const [icon, word] of rows) {
+    // icon 24x24 at S2
+    const ic = icons[icon];
+    wc.fillStyle = '#0ff';
+    for (let iy=0; iy<24; iy++) for (let ix=0; ix<24; ix++)
+      if (ic[iy][ix]==='#') wc.fillRect(4+ix*S2, yy+iy*S2, S2, S2);
+    drawWord(wc, glyphs, word, 4 + 26*S2, yy + 4*S2, S2, '#0ff');
+    yy += 26 * S2;
+  }
+
+  // icon atlas
+  const ip = document.getElementById('iconprev').getContext('2d');
+  ip.fillStyle = '#000'; ip.fillRect(0,0,900,180);
+  let ix0 = 4, iy0 = 4; const is = 5;
+  for (const name of ICONS) {
+    const ic = icons[name];
+    ip.fillStyle = '#0ff';
+    for (let yy2=0; yy2<24; yy2++) for (let xx2=0; xx2<24; xx2++)
+      if (ic[yy2][xx2]==='#') ip.fillRect(ix0+xx2*is, iy0+yy2*is, is, is);
+    ix0 += 26*is + 6;
+    if (ix0 > 840) { ix0 = 4; iy0 += 26*is; }
+  }
+
+  document.getElementById('status').textContent =
+    'DONE. glyphs='+Object.keys(glyphs).length+' icons='+Object.keys(icons).length+
+    ' | sample widths: '+['A','a','i','m','1',' '].map(c=>c+':'+glyphs[c].w).join(' ');
+
+  // ---- TS module generation ----
+  const ROWS = 8; // 04b03 fits rows 0..7
+
+  function fontTS() {
+    let entries = '';
+    for (const ch of CHARS) {
+      const g = glyphs[ch];
+      const rows = g.rows.slice(0, ROWS).map(r => JSON.stringify(r)).join(',');
+      entries += '  ' + JSON.stringify(ch) + ': { w: ' + g.w + ', rows: [' + rows + '] },\n';
+    }
+    return `// GENERATED — do not edit by hand. Baked from 04b03.ttf (Yuji Oshimoto, free) at 8px.
+// Regenerate with scratchpad/gen/bake.html. Each glyph: proportional advance \`w\`
+// plus \`rows\` (${ROWS} strings of '#'/'.'), one 04b03 pixel per char, top-aligned.
+export interface Glyph { w: number; rows: string[]; }
+export const CELL_H = ${ROWS};
+export const FONT_04B03: Record<string, Glyph> = {
+${entries}};
+`;
+  }
+
+  function iconsTS() {
+    let entries = '';
+    for (const name of ICONS) {
+      const rows = icons[name].map(r => JSON.stringify(r)).join(',\n    ');
+      entries += '  ' + JSON.stringify(name) + ': [\n    ' + rows + ',\n  ],\n';
+    }
+    return `// GENERATED — do not edit by hand. Baked from pixelarticons (MIT) 24x24 SVGs.
+// Regenerate with scratchpad/gen/bake.html. Each icon: 24 strings of 24 '#'/'.'.
+export const ICON_W = 24;
+export const ICON_H = 24;
+export const ICONS: Record<string, string[]> = {
+${entries}};
+`;
+  }
+
+  async function save(name, text) {
+    const r = await fetch('/write', { method: 'POST', headers: { 'x-filename': name }, body: text });
+    return name + ' → ' + r.status + ' ' + (await r.text());
+  }
+
+  document.getElementById('save').onclick = async () => {
+    const out = [];
+    out.push(await save('src/app/components/oled/font04b03.ts', fontTS()));
+    out.push(await save('src/app/components/oled/icons.ts', iconsTS()));
+    document.getElementById('saved').textContent = out.join('\n');
+  };
+})();
+</script>

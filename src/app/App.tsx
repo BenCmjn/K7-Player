@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { CassetteWheel } from './components/CassetteWheel';
-import { OledCanvas, drawOledScreen, type OledScreenMode } from './components/OledScreen';
+import { OledCanvas, drawOledScreen, type OledScreenMode, type OledMenu } from './components/OledScreen';
 import svgPaths from '../imports/Cassette/svg-kn4si39m8f';
 import { imgCover } from '../imports/Cassette/svg-58mld';
 import qrNetlify from '../assets/qr-netlify.svg';
@@ -39,6 +39,12 @@ const MEGAMIXES: Megamix[] = Object.entries(audioModules)
 // K7 Rebirth ships as the default tape; fall back to the first one alphabetically.
 const DEFAULT_MEGAMIX: Megamix | undefined =
   MEGAMIXES.find((m) => /rebirth/i.test(m.name)) ?? MEGAMIXES[0];
+
+// The on-device menu browses a small tree: Hello (home) → folder list → tracks.
+// There's one folder for now ("Library"); the structure lets "both wheels = go
+// up a level" climb tracks → folders → Hello, and lets more folders be added.
+interface Folder { name: string; tracks: Megamix[]; }
+const FOLDERS: Folder[] = [{ name: 'Library', tracks: MEGAMIXES }];
 
 const FABRIC_URL: string | undefined = Object.values(textureModules)[0];
 
@@ -193,7 +199,7 @@ function useAudioEngine() {
     setIsLoaded(true);
   }, []);
 
-  return { isPlaying, playbackRate, currentTime, duration, trackName, isLoaded, isScrubbing, volume, togglePlay, seek, setRate, adjustVolume, loadUrl };
+  return { isPlaying, playbackRate, currentTime, duration, trackName, isLoaded, isScrubbing, volume, play, pause, togglePlay, seek, setRate, adjustVolume, loadUrl };
 }
 
 // ─── Interactive TapeControls (replaces Figma static TapeControls) ─────────
@@ -205,6 +211,9 @@ interface OledProps {
   playbackRate: number;
   trackName: string;
   volume: number;
+  playing: boolean;
+  marqueeSince: number;
+  menu?: OledMenu;
 }
 
 interface TapeControlsProps extends OledProps {
@@ -217,10 +226,11 @@ interface TapeControlsProps extends OledProps {
   leftPressed: boolean;
   rightPressed: boolean;
   onLeftHoldChange: (held: boolean) => void;
+  onRightHoldChange: (held: boolean) => void;
 }
 
 function InteractiveTapeControls(props: TapeControlsProps) {
-  const { leftAngle, rightAngle, onLeftRotate, onRightRotate, onLeftCenter, onRightCenter, leftPressed, rightPressed, onLeftHoldChange, ...oledState } = props;
+  const { leftAngle, rightAngle, onLeftRotate, onRightRotate, onLeftCenter, onRightCenter, leftPressed, rightPressed, onLeftHoldChange, onRightHoldChange, ...oledState } = props;
   return (
     <div
       className="absolute overflow-clip rounded-[88px]"
@@ -275,6 +285,7 @@ function InteractiveTapeControls(props: TapeControlsProps) {
         onRotate={onRightRotate}
         onCenterClick={onRightCenter}
         forcePressed={rightPressed}
+        onHoldChange={onRightHoldChange}
       />
     </div>
   );
@@ -605,148 +616,9 @@ function DimensionLines() {
   );
 }
 
-interface MegamixModalProps {
-  megamixes: Megamix[];
-  currentUrl?: string;
-  onSelect: (m: Megamix) => void;
-  onClose: () => void;
-}
-
-function MegamixModal({ megamixes, currentUrl, onSelect, onClose }: MegamixModalProps) {
-  // Close on Escape
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 30,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 16,
-        background: 'rgba(0,0,0,0.42)',
-        backdropFilter: 'blur(6px)',
-        WebkitBackdropFilter: 'blur(6px)',
-        animation: 'k7-backdrop-in 0.2s ease-out both',
-      }}
-    >
-      {/* Keyframes for the staggered entry animation */}
-      <style>{`
-        @keyframes k7-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
-        @keyframes k7-card-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
-        @keyframes k7-row-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-      `}</style>
-
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: '100%',
-          maxWidth: 560,
-          maxHeight: '82vh',
-          background: '#f9faf1',
-          border: '2px solid #202020',
-          borderRadius: 10,
-          boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
-          overflow: 'hidden',
-          display: 'flex',
-          flexDirection: 'column',
-          fontFamily: '"Barlow Condensed", "Oswald", sans-serif',
-          animation: 'k7-card-in 0.28s ease-out both',
-        }}
-      >
-        {/* Header band — evokes the printed J-card top strip */}
-        <div style={{ display: 'flex', alignItems: 'stretch', borderBottom: '2px solid #202020', flexShrink: 0 }}>
-          <div style={{ flex: 1, padding: '7px 14px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: -0.5, lineHeight: 1, color: '#202020', textTransform: 'uppercase' }}>
-              Megamix Select
-            </div>
-            <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: 1.5, color: '#202020', textTransform: 'uppercase', marginTop: 2 }}>
-              Type&nbsp;I (Normal) Position · Insert a tape
-            </div>
-          </div>
-          {/* Corner colour stripes */}
-          <div style={{ display: 'flex', flexDirection: 'column', width: 74 }}>
-            <div style={{ flex: 1, background: '#f0c419' }} />
-            <div style={{ flex: 1, background: '#e8801c' }} />
-            <div style={{ flex: 1, background: '#c0271e' }} />
-          </div>
-          {/* Close */}
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            style={{ width: 40, border: 'none', borderLeft: '2px solid #202020', background: '#202020', color: '#f9faf1', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}
-          >
-            ×
-          </button>
-        </div>
-
-        {/* Tracklist — handwritten titles on red dotted lines, fading in one by one */}
-        <div style={{ padding: '4px 0', overflowY: 'auto' }}>
-          {megamixes.map((m, i) => {
-            const selected = m.url === currentUrl;
-            return (
-              <button
-                key={m.url}
-                onClick={() => { onSelect(m); onClose(); }}
-                title={m.name}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  width: '100%',
-                  textAlign: 'left',
-                  background: selected ? 'rgba(192,39,30,0.08)' : 'transparent',
-                  border: 'none',
-                  borderTop: i === 0 ? 'none' : '1px dotted rgba(192,39,30,0.6)',
-                  padding: '10px 14px',
-                  cursor: 'pointer',
-                  color: '#202020',
-                  animation: 'k7-row-in 0.32s ease-out both',
-                  animationDelay: `${100 + i * 90}ms`,
-                }}
-              >
-                {/* A-side style marker */}
-                <span
-                  style={{
-                    flexShrink: 0,
-                    width: 16,
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: selected ? '#c0271e' : '#b9b9ad',
-                    fontFamily: '"Barlow Condensed", sans-serif',
-                  }}
-                >
-                  {selected ? '▶' : String(i + 1).padStart(2, '0')}
-                </span>
-                <span
-                  style={{
-                    fontFamily: '"Rock Salt", cursive',
-                    fontSize: 13,
-                    lineHeight: 1.35,
-                    color: '#202020',
-                    display: '-webkit-box',
-                    WebkitLineClamp: 2,
-                    WebkitBoxOrient: 'vertical',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {m.name}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
+// The old centred J-card megamix modal was replaced by the on-device OLED menu
+// (browse the tracklist right on the deck with the wheel — see the 'menu' mode
+// in OledScreen and the menu wiring below in App).
 
 // ─── Controls guide (same J-card modal, adapts to keyboard vs touch) ────────
 
@@ -758,11 +630,13 @@ interface ControlRow {
 }
 
 const CONTROL_ROWS: ControlRow[] = [
-  { glyph: '⏯', action: 'Play · Pause', keys: ['A'], touch: 'Tap the left wheel' },
+  { glyph: '⏯', action: 'Play · Pause', keys: ['A', '/', 'Space'], touch: 'Tap the left wheel' },
   { glyph: '⟲', action: 'Reset speed', keys: ['S'], touch: 'Tap the right wheel' },
   { glyph: '↔', action: 'Scrub · seek', keys: ['←', '/', '→'], touch: 'Scroll the left wheel' },
   { glyph: '≈', action: 'Speed · chipmunk', keys: ['↑', '/', '↓'], touch: 'Scroll the right wheel' },
   { glyph: '♪', action: 'Volume', keys: ['hold', 'A', '+', '↑', '/', '↓'], touch: 'Hold left + scroll right' },
+  { glyph: '☰', action: 'Songs menu · up', keys: ['A', '+', 'S'], touch: 'Tap both wheels' },
+  { glyph: '⏎', action: 'Songs menu · enter', keys: ['S'], touch: 'Tap the right wheel' },
 ];
 
 function KeyToken({ token }: { token: string }) {
@@ -922,7 +796,8 @@ export default function App() {
 
   // Which megamix is loaded in the deck
   const [currentUrl, setCurrentUrl] = useState(DEFAULT_MEGAMIX?.url);
-  const [menuOpen, setMenuOpen] = useState(false);
+  // The device boots into its menu on the Hello (home) screen.
+  const [menuOpen, setMenuOpen] = useState(true);
   const [guideOpen, setGuideOpen] = useState(false);
 
   // Real-size resize tool (desktop): manualScale overrides the auto fit-scale
@@ -932,24 +807,49 @@ export default function App() {
   // Keyboard-driven "pressed" visuals + transient volume HUD
   const [leftPressed, setLeftPressed] = useState(false);
   const [rightPressed, setRightPressed] = useState(false);
-  // Touch/mouse hold on the left wheel's center (bridges the same combo to touch + mouse-drag)
+  // Touch/mouse hold on each wheel's center (bridges the same combos to touch + mouse-drag)
   const [leftHeldTouch, setLeftHeldTouch] = useState(false);
+  const [rightHeldTouch, setRightHeldTouch] = useState(false);
   const leftHeld = leftPressed || leftHeldTouch;
+  const rightHeld = rightPressed || rightHeldTouch;
   // Suppresses the play/pause tap-toggle when the hold was actually used as the volume combo
   const leftComboUsedRef = useRef(false);
   const handleLeftHoldChange = useCallback((held: boolean) => {
     if (held) leftComboUsedRef.current = false;
     setLeftHeldTouch(held);
   }, []);
-  // OLED screen mode: defaults to playing/pause, but a wheel touch (mouse,
-  // touch, or keyboard) shows its feedback screen for 1s, then reverts.
+  const handleRightHoldChange = useCallback((held: boolean) => setRightHeldTouch(held), []);
+  // OLED screen mode: the resting screen is 'playing' (playing or paused); a
+  // wheel touch (mouse, touch, or keyboard) flashes a feedback screen — wheel
+  // feedback for 1s, play/pause for 2s — then reverts.
   const [transientMode, setTransientMode] = useState<OledScreenMode | null>(null);
   const transientTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const triggerTransient = useCallback((mode: OledScreenMode) => {
+  const triggerTransient = useCallback((mode: OledScreenMode, ms = 1000) => {
     setTransientMode(mode);
     if (transientTimer.current) clearTimeout(transientTimer.current);
-    transientTimer.current = setTimeout(() => setTransientMode(null), 1000);
+    transientTimer.current = setTimeout(() => setTransientMode(null), ms);
   }, []);
+
+  // On-device menu: a tree browsed with the wheels. 'root' is the Hello (home)
+  // screen — the ceiling; below it the folder list, then a folder's tracks.
+  type MenuLevel = 'root' | 'folders' | 'tracks';
+  const [menuLevel, setMenuLevel] = useState<MenuLevel>('root');
+  const [menuFolderIndex, setMenuFolderIndex] = useState(0);
+  const [menuTrackIndex, setMenuTrackIndex] = useState(0);
+
+  // Boot: the Hello screen greets for 2s, then the device drops into the file
+  // system's first folder (Library). (Only advances if still sitting on Hello.)
+  useEffect(() => {
+    const id = setTimeout(() => setMenuLevel((l) => (l === 'root' ? 'folders' : l)), 2000);
+    return () => clearTimeout(id);
+  }, []);
+  const locateCurrent = useCallback(() => {
+    for (let f = 0; f < FOLDERS.length; f++) {
+      const t = FOLDERS[f].tracks.findIndex((m) => m.url === currentUrl);
+      if (t >= 0) return { f, t };
+    }
+    return { f: 0, t: 0 };
+  }, [currentUrl]);
 
   // Load the default tape on mount
   useEffect(() => {
@@ -993,59 +893,180 @@ export default function App() {
     setManualScale((s) => Math.max(0.15, Math.min(1.15, (s ?? REAL_SCALE) * factor)));
   }, []);
 
+  // ── On-device menu navigation ──────────────────────────────────────
+  // Controls (both wheels + keyboard A/S mirror each other):
+  //   · both centers together → climb one level (deck → track list → folders,
+  //     and above folders leaves the menu)
+  //   · right centre alone → enter the folder, or play the track & show Playing
+  //   · long-press right centre → jump straight back to the Playing screen
+  //   · turn either wheel → move the highlight (accumulates MENU_STEP° per step)
+  const MENU_STEP = 26;
+  const menuAccumRef = useRef(0);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+
+  // Enter the menu from the deck at the current track's sibling list.
+  const enterMenu = useCallback(() => {
+    const { f, t } = locateCurrent();
+    menuAccumRef.current = 0;
+    setMenuLevel('tracks');
+    setMenuFolderIndex(f);
+    setMenuTrackIndex(t);
+    setGuideOpen(false);
+    setMenuOpen(true);
+  }, [locateCurrent]);
+
+  // "Both wheels" — climb one level up the tree. Tracks → folders → Hello
+  // (root), and Hello is the ceiling: you can't go higher.
+  const menuUp = useCallback(() => {
+    if (!menuOpen) { enterMenu(); return; }
+    menuAccumRef.current = 0;
+    if (menuLevel === 'tracks') setMenuLevel('folders');
+    else if (menuLevel === 'folders') setMenuLevel('root');
+    // at 'root' (Hello) there's nowhere higher — stay put
+  }, [menuOpen, menuLevel, enterMenu]);
+
+  // Play/pause — available from anywhere (deck or menu), via the left centre,
+  // the A key, or the space bar.
+  const togglePlayPause = useCallback(() => {
+    const willPlay = !audio.isPlaying;
+    audio.togglePlay();
+    triggerTransient(willPlay ? 'play' : 'pause', 2000); // 2s, then back to Playing
+  }, [audio, triggerTransient]);
+
+  // Right centre — descend / commit.
+  const menuEnter = useCallback(() => {
+    if (menuLevel === 'root') { // Hello → into the file system (folder list)
+      menuAccumRef.current = 0;
+      setMenuLevel('folders');
+      return;
+    }
+    if (menuLevel === 'folders') {
+      const cur = locateCurrent();
+      menuAccumRef.current = 0;
+      setMenuTrackIndex(menuFolderIndex === cur.f ? cur.t : 0);
+      setMenuLevel('tracks');
+      return;
+    }
+    const track = FOLDERS[menuFolderIndex]?.tracks[menuTrackIndex];
+    if (track) {
+      // Choosing the track that's already loaded keeps its current position —
+      // only a different track reloads from the start.
+      if (track.url !== currentUrl) selectMegamix(track);
+      audio.play();
+    }
+    setMenuOpen(false);
+  }, [menuLevel, menuFolderIndex, menuTrackIndex, selectMegamix, audio, locateCurrent, currentUrl]);
+
+  const moveMenu = useCallback((delta: number) => {
+    const dir = delta > 0 ? 1 : -1;
+    if (menuLevel === 'root') return; // Hello has nothing to scroll
+    if (menuLevel === 'folders') {
+      setMenuFolderIndex((i) => Math.max(0, Math.min(FOLDERS.length - 1, i + dir)));
+    } else {
+      const n = FOLDERS[menuFolderIndex]?.tracks.length ?? 0;
+      if (n > 0) setMenuTrackIndex((i) => Math.max(0, Math.min(n - 1, i + dir)));
+    }
+  }, [menuLevel, menuFolderIndex]);
+
+  const scrollMenu = useCallback((deltaDeg: number) => {
+    menuAccumRef.current += deltaDeg;
+    while (Math.abs(menuAccumRef.current) >= MENU_STEP) {
+      const dir = menuAccumRef.current > 0 ? 1 : -1;
+      moveMenu(dir);
+      menuAccumRef.current -= dir * MENU_STEP;
+    }
+  }, [moveMenu]);
+
   const handleLeftRotate = useCallback((delta: number) => {
+    if (menuOpen) { scrollMenu(delta); setLeftAngle(a => a + delta); return; }
     // Holding the left wheel down is the volume modifier — don't also scrub while held.
     if (leftHeld) return;
     audio.seek(delta * 0.07);
     setLeftAngle(a => a + delta); // only visual, only on drag
     triggerTransient(delta > 0 ? 'scrub-fwd' : 'scrub-bwd');
-  }, [audio, leftHeld, triggerTransient]);
+  }, [audio, leftHeld, triggerTransient, menuOpen, scrollMenu]);
 
   const handleRightRotate = useCallback((delta: number) => {
     if (leftHeld) {
-      // Left held (keyboard A, touch, or mouse) + right wheel drag/scroll → volume
+      // Left held + right wheel → volume, and it works everywhere (deck or menu).
       audio.adjustVolume(delta * 0.004);
       triggerTransient('volume');
       leftComboUsedRef.current = true; // suppress the left tap-to-toggle-play once released
+    } else if (menuOpen) {
+      scrollMenu(delta); // browse the menu
     } else {
       const nextRate = Math.max(0.25, Math.min(4.0, audio.playbackRate + delta * 0.012));
       audio.setRate(nextRate);
       triggerTransient(Math.abs(nextRate - 1) < 0.03 ? 'normal-speed' : nextRate > 1 ? 'chipmunk' : 'slow');
     }
     setRightAngle(a => a + delta); // only visual, only on drag
-  }, [audio, leftHeld, triggerTransient]);
+  }, [audio, leftHeld, triggerTransient, menuOpen, scrollMenu]);
+
+  // Both centres pressed together climb the menu tree; the refs suppress the
+  // individual clicks that fire when each centre is released.
+  const suppressLeftClickRef = useRef(false);
+  const suppressRightClickRef = useRef(false);
+  const comboArmedRef = useRef(false);
+  const rightLongTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (leftHeld && rightHeld && !comboArmedRef.current) {
+      comboArmedRef.current = true;
+      suppressLeftClickRef.current = true;
+      suppressRightClickRef.current = true;
+      if (rightLongTimerRef.current) { clearTimeout(rightLongTimerRef.current); rightLongTimerRef.current = null; }
+      menuUp();
+    }
+    if (!leftHeld && !rightHeld) comboArmedRef.current = false;
+  }, [leftHeld, rightHeld, menuUp]);
+
+  // Long-press the right centre inside the menu → back to the Playing screen
+  // (without changing what's loaded or whether it's playing).
+  useEffect(() => {
+    if (rightHeld && menuOpen && !comboArmedRef.current) {
+      rightLongTimerRef.current = setTimeout(() => {
+        suppressRightClickRef.current = true;
+        setMenuOpen(false);
+      }, 550);
+    }
+    return () => {
+      if (rightLongTimerRef.current) { clearTimeout(rightLongTimerRef.current); rightLongTimerRef.current = null; }
+    };
+  }, [rightHeld, menuOpen]);
 
   const handleLeftCenterClick = useCallback(() => {
+    if (suppressLeftClickRef.current) { suppressLeftClickRef.current = false; return; }
     if (leftComboUsedRef.current) { leftComboUsedRef.current = false; return; }
-    audio.togglePlay();
-  }, [audio]);
+    togglePlayPause(); // play/pause from anywhere, menu included
+  }, [togglePlayPause]);
 
   const handleRightCenterClick = useCallback(() => {
+    if (suppressRightClickRef.current) { suppressRightClickRef.current = false; return; }
+    if (menuOpen) { menuEnter(); return; } // enter folder / play track
     audio.setRate(1.0);
     triggerTransient('normal-speed');
-  }, [audio, triggerTransient]);
+  }, [audio, menuOpen, menuEnter, triggerTransient]);
 
-  // Latest callbacks, read by the (mounted-once) keyboard listener
-  const latest = useRef({
-    menuOpen: menuOpen || guideOpen,
+  // Latest callbacks, read by the (mounted-once) keyboard listener.
+  //  · guideBlocked — the Controls modal is up, swallow everything.
+  //  · menuOpen — the on-device menu is up: arrows browse, tapLeft selects,
+  //    tapRight/Escape leaves. Otherwise the wheels do their normal thing.
+  const latestValue = {
+    guideBlocked: guideOpen,
+    menuOpen,
     rotateLeft: handleLeftRotate,
     rotateRight: handleRightRotate,
     spinRight: setRightAngle,
-    togglePlay: audio.togglePlay,
-    resetRate: handleRightCenterClick,
     adjustVolume: audio.adjustVolume,
     triggerTransient,
-  });
-  latest.current = {
-    menuOpen: menuOpen || guideOpen,
-    rotateLeft: handleLeftRotate,
-    rotateRight: handleRightRotate,
-    spinRight: setRightAngle,
-    togglePlay: audio.togglePlay,
-    resetRate: handleRightCenterClick,
-    adjustVolume: audio.adjustVolume,
-    triggerTransient,
+    tapLeft: handleLeftCenterClick,
+    tapRight: handleRightCenterClick,
+    playPause: togglePlayPause,
+    menuMove: moveMenu,
+    closeMenu,
   };
+  const latest = useRef(latestValue);
+  latest.current = latestValue;
 
   // ── Keyboard controls ──────────────────────────────────────────────
   //  A / S = tap the left / right wheel centre (play-pause / reset speed)
@@ -1063,17 +1084,19 @@ export default function App() {
 
     const tick = () => {
       const c = latest.current;
-      if (c.menuOpen) return;
-      if (held.has('ArrowLeft')) { if (aDown) aCombo = true; else c.rotateLeft(-ROT); }
-      if (held.has('ArrowRight')) { if (aDown) aCombo = true; else c.rotateLeft(ROT); }
-      if (held.has('ArrowUp')) {
-        if (aDown) { c.adjustVolume(VOL); c.spinRight((a) => a + ROT); c.triggerTransient('volume'); aCombo = true; }
-        else c.rotateRight(ROT);
+      if (c.guideBlocked) return;
+      if (aDown) {
+        // Hold A + ↑/↓ = volume — works everywhere, menu included.
+        if (held.has('ArrowUp')) { c.adjustVolume(VOL); c.spinRight((a) => a + ROT); c.triggerTransient('volume'); aCombo = true; }
+        if (held.has('ArrowDown')) { c.adjustVolume(-VOL); c.spinRight((a) => a - ROT); c.triggerTransient('volume'); aCombo = true; }
+        if (held.has('ArrowLeft') || held.has('ArrowRight')) aCombo = true; // consumed by the combo
+        return;
       }
-      if (held.has('ArrowDown')) {
-        if (aDown) { c.adjustVolume(-VOL); c.spinRight((a) => a - ROT); c.triggerTransient('volume'); aCombo = true; }
-        else c.rotateRight(-ROT);
-      }
+      if (c.menuOpen) return; // plain arrows in the menu are handled discretely on keydown
+      if (held.has('ArrowLeft')) c.rotateLeft(-ROT);
+      if (held.has('ArrowRight')) c.rotateLeft(ROT);
+      if (held.has('ArrowUp')) c.rotateRight(ROT);
+      if (held.has('ArrowDown')) c.rotateRight(-ROT);
     };
     const start = () => { if (!timer) timer = setInterval(tick, 16); };
     const stopIfIdle = () => { if (timer && held.size === 0) { clearInterval(timer); timer = null; } };
@@ -1081,20 +1104,32 @@ export default function App() {
     const onDown = (e: KeyboardEvent) => {
       const c = latest.current;
       const k = e.key;
-      if (k === 'a' || k === 'A') {
+      if (k === 'Escape') {
+        if (c.menuOpen) c.closeMenu();
+        return;
+      }
+      if (k === ' ' || k === 'Spacebar') {
         e.preventDefault();
-        if (e.repeat || c.menuOpen) return;
-        aDown = true; aCombo = false;
+        if (c.guideBlocked || e.repeat) return;
+        c.playPause(); // space = play/pause, from anywhere
+      } else if (k === 'a' || k === 'A') {
+        e.preventDefault();
+        if (c.guideBlocked) return;
         setLeftPressed(true);
+        if (e.repeat) return;
+        aDown = true; aCombo = false; // armed even in the menu (enables the volume combo)
       } else if (k === 's' || k === 'S') {
         e.preventDefault();
-        if (e.repeat || c.menuOpen) return;
-        setRightPressed(true);
-        c.resetRate();
+        if (c.guideBlocked) return;
+        setRightPressed(true); // acts on release, so A+S = both-centres combo works
       } else if (isArrow(k)) {
         e.preventDefault();
-        if (c.menuOpen) return;
-        held.add(k);
+        if (c.guideBlocked) return;
+        if (c.menuOpen && !aDown) {
+          if (!e.repeat) c.menuMove(k === 'ArrowDown' || k === 'ArrowRight' ? 1 : -1);
+          return;
+        }
+        held.add(k); // A-held volume combo runs through the tick, even in the menu
         start();
       }
     };
@@ -1102,14 +1137,18 @@ export default function App() {
     const onUp = (e: KeyboardEvent) => {
       const c = latest.current;
       const k = e.key;
-      if (k === 'a' || k === 'A') {
+      if (k === ' ' || k === 'Spacebar') {
+        e.preventDefault();
+      } else if (k === 'a' || k === 'A') {
         e.preventDefault();
         setLeftPressed(false);
-        if (aDown && !aCombo && !c.menuOpen) c.togglePlay();
+        if (c.guideBlocked) { aDown = false; return; }
+        if (aDown && !aCombo) c.tapLeft(); // play/pause (a clean tap, not the volume combo)
         aDown = false;
       } else if (k === 's' || k === 'S') {
         e.preventDefault();
         setRightPressed(false);
+        if (!c.guideBlocked) c.tapRight(); // reset speed · enter/play in menu (suppressed after a combo)
       } else if (isArrow(k)) {
         held.delete(k);
         stopIfIdle();
@@ -1133,7 +1172,40 @@ export default function App() {
     };
   }, []);
 
-  const oledMode: OledScreenMode = transientMode ?? (audio.isPlaying ? 'playing' : 'pause');
+  // Menu screen content, for the folders / tracks levels ('root' shows Hello).
+  const oledMenu: OledMenu | undefined = (() => {
+    if (!menuOpen || menuLevel === 'root') return undefined;
+    if (menuLevel === 'folders') {
+      return {
+        folder: 'Home',
+        current: FOLDERS[menuFolderIndex]?.name ?? 'Empty',
+        next: FOLDERS[menuFolderIndex + 1]?.name ?? '',
+      };
+    }
+    const folder = FOLDERS[menuFolderIndex];
+    const tracks = folder?.tracks ?? [];
+    return {
+      folder: folder?.name ?? 'Library',
+      current: tracks[menuTrackIndex]?.name ?? 'Empty',
+      next: tracks[menuTrackIndex + 1]?.name ?? '',
+    };
+  })();
+  // Transient feedback wins (so volume/play flash even while in the menu, then
+  // hand back); then the open menu — Hello at the root, the browser below it;
+  // otherwise the resting Playing screen (playing-vs-paused).
+  const oledMode: OledScreenMode =
+    transientMode ?? (menuOpen ? (menuLevel === 'root' ? 'hello' : 'menu') : 'playing');
+
+  // Reset the marquee's start-hold whenever the visible screen or the
+  // highlighted menu item changes, so every fresh screen shows the title's
+  // start for a beat before it begins to crawl.
+  const screenKey = `${oledMode}|${menuLevel}|${menuFolderIndex}|${menuTrackIndex}`;
+  const marqueeSinceRef = useRef(performance.now());
+  const prevScreenKeyRef = useRef(screenKey);
+  if (prevScreenKeyRef.current !== screenKey) {
+    prevScreenKeyRef.current = screenKey;
+    marqueeSinceRef.current = performance.now();
+  }
 
   // Natural cassette dimensions from Figma
   const CW = 1080;
@@ -1160,9 +1232,9 @@ export default function App() {
         touchAction: 'none',
       }}
     >
-      {/* Discreet triggers: megamix selector + controls guide */}
+      {/* Discreet trigger: controls guide (the song menu lives on the device —
+          both wheels together open it). */}
       <div style={{ position: 'absolute', top: 14, left: '50%', transform: 'translateX(-50%)', zIndex: 20, display: 'flex', gap: 10 }}>
-        <TopTrigger icon="▤" label="MEGAMIX" onClick={() => { setGuideOpen(false); setMenuOpen(true); }} />
         <TopTrigger icon="?" label="CONTROLS" onClick={() => { setMenuOpen(false); setGuideOpen(true); }} />
       </div>
 
@@ -1235,23 +1307,33 @@ export default function App() {
             leftPressed={leftPressed}
             rightPressed={rightPressed}
             onLeftHoldChange={handleLeftHoldChange}
+            onRightHoldChange={handleRightHoldChange}
             mode={oledMode}
             currentTime={audio.currentTime}
             duration={audio.duration}
             playbackRate={audio.playbackRate}
             trackName={audio.trackName}
             volume={audio.volume}
+            playing={audio.isPlaying}
+            marqueeSince={marqueeSinceRef.current}
+            menu={oledMenu}
           />
         </div>
       </div>
 
       {menuOpen && (
-        <MegamixModal
-          megamixes={MEGAMIXES}
-          currentUrl={currentUrl}
-          onSelect={selectMegamix}
-          onClose={() => setMenuOpen(false)}
-        />
+        <div
+          style={{
+            position: 'absolute', bottom: 18, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 20, pointerEvents: 'none', textAlign: 'center',
+            fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 2,
+            color: '#a08840', textTransform: 'uppercase', whiteSpace: 'nowrap',
+          }}
+        >
+          {isMobile
+            ? 'Turn a wheel to browse · tap right to open/play · tap both to go up'
+            : 'Turn a wheel to browse · click right to open/play · click both (or Esc) to go up'}
+        </div>
       )}
 
       {guideOpen && (
