@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1074 656" fill="none">
+  <!-- PLACEHOLDER internals — replace with the real Figma export.
+       Schematic ESP32 + DAC + microSD + LiPo build for the transparent/naked shell. -->
+  <defs>
+    <linearGradient id="pcb" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#13463a"/>
+      <stop offset="1" stop-color="#0d3329"/>
+    </linearGradient>
+  </defs>
+
+  <!-- PCB -->
+  <rect x="30" y="30" width="1014" height="596" rx="40" fill="url(#pcb)" stroke="#093026" stroke-width="3"/>
+  <rect x="30" y="30" width="1014" height="596" rx="40" fill="none" stroke="#1c6b56" stroke-width="1" opacity="0.5"/>
+
+  <!-- gold traces -->
+  <g stroke="#c9a24a" stroke-width="3" opacity="0.55" fill="none">
+    <path d="M150 160 H420 V300 H620"/>
+    <path d="M150 220 H360 V420 H700"/>
+    <path d="M760 150 V360 H900"/>
+    <path d="M470 470 H840"/>
+  </g>
+  <g fill="#c9a24a" opacity="0.7">
+    <circle cx="150" cy="160" r="6"/><circle cx="620" cy="300" r="6"/>
+    <circle cx="700" cy="420" r="6"/><circle cx="900" cy="360" r="6"/>
+    <circle cx="840" cy="470" r="6"/><circle cx="470" cy="470" r="6"/>
+  </g>
+
+  <!-- ESP32 module (metal shield) -->
+  <g>
+    <rect x="120" y="330" width="230" height="150" rx="8" fill="#1b1b1f" stroke="#3a3a42" stroke-width="3"/>
+    <rect x="138" y="348" width="150" height="114" rx="4" fill="#2a2a30" stroke="#4a4a52" stroke-width="2"/>
+    <text x="163" y="412" font-family="monospace" font-size="26" fill="#8f8f9a" letter-spacing="1">ESP32</text>
+    <!-- castellated pins -->
+    <g fill="#b9922f">
+      <rect x="120" y="330" width="10" height="150" opacity="0"/>
+    </g>
+  </g>
+
+  <!-- DAC chip -->
+  <g>
+    <rect x="620" y="250" width="120" height="120" rx="6" fill="#101012" stroke="#3a3a42" stroke-width="2"/>
+    <text x="646" y="318" font-family="monospace" font-size="20" fill="#8f8f9a">DAC</text>
+    <g stroke="#c9a24a" stroke-width="3">
+      <path d="M620 270 h-14 M620 300 h-14 M620 330 h-14 M740 270 h14 M740 300 h14 M740 330 h14"/>
+    </g>
+  </g>
+
+  <!-- microSD slot -->
+  <g>
+    <rect x="820" y="120" width="180" height="130" rx="6" fill="#9a9ca3" stroke="#6d6f76" stroke-width="3"/>
+    <rect x="838" y="150" width="120" height="80" rx="4" fill="#2a2b2f"/>
+    <text x="828" y="240" font-family="monospace" font-size="18" fill="#4a4b50">microSD</text>
+  </g>
+
+  <!-- LiPo battery -->
+  <g>
+    <rect x="150" y="510" width="520" height="86" rx="12" fill="#3a4048" stroke="#20242a" stroke-width="3"/>
+    <rect x="150" y="510" width="520" height="30" rx="12" fill="#474e57"/>
+    <text x="330" y="568" font-family="monospace" font-size="26" fill="#aeb4bd" letter-spacing="2">LiPo 3.7V</text>
+    <!-- wires -->
+    <path d="M670 540 h60 M670 566 h60" stroke="#c0392b" stroke-width="5" fill="none"/>
+  </g>
+
+  <!-- OLED ribbon hint (points to the panel window area) -->
+  <rect x="430" y="150" width="180" height="70" rx="6" fill="#0a0a0c" stroke="#3a3a42" stroke-width="2"/>
+  <g stroke="#c9a24a" stroke-width="2" opacity="0.6">
+    <path d="M448 150 V132 M470 150 V132 M492 150 V132 M514 150 V132 M536 150 V132 M558 150 V132 M580 150 V132"/>
+  </g>
+</svg>

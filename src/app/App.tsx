@@ -4,6 +4,7 @@ import { OledCanvas, drawOledScreen, type OledScreenMode, type OledMenu } from '
 import svgPaths from '../imports/Cassette/svg-kn4si39m8f';
 import { imgCover } from '../imports/Cassette/svg-58mld';
 import qrNetlify from '../assets/qr-netlify.svg';
+import { PLASTIC_THEMES, plasticById, buildLabelStyles, labelById, type LabelStyle } from './shell/themes';
 
 // ─── Content library ────────────────────────────────────────────────────────
 // Every .mp3 dropped in src/assets/audio becomes a selectable megamix, and the
@@ -21,6 +22,24 @@ const textureModules = import.meta.glob('../assets/textures/*.{png,jpg,jpeg,webp
   query: '?url',
   import: 'default',
 }) as Record<string, string>;
+
+// Drop a Figma-exported label design into src/assets/labels/*.svg and it becomes
+// a selectable label style automatically (alongside the built-in "Classic").
+const labelModules = import.meta.glob('../assets/labels/*.svg', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+}) as Record<string, string>;
+const LABEL_STYLES = buildLabelStyles(labelModules);
+
+// The transparent/naked shells reveal the internal build (ESP32/DAC/SD/battery),
+// supplied as a single SVG in src/assets/shell/internals.svg (optional).
+const internalsModules = import.meta.glob('../assets/shell/internals.svg', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+}) as Record<string, string>;
+const INTERNALS_URL: string | undefined = Object.values(internalsModules)[0];
 
 interface Megamix {
   url: string;
@@ -227,18 +246,27 @@ interface TapeControlsProps extends OledProps {
   rightPressed: boolean;
   onLeftHoldChange: (held: boolean) => void;
   onRightHoldChange: (held: boolean) => void;
+  reveal?: boolean; // transparent/naked: expose the panel's plastic-covered edges
 }
 
 function InteractiveTapeControls(props: TapeControlsProps) {
-  const { leftAngle, rightAngle, onLeftRotate, onRightRotate, onLeftCenter, onRightCenter, leftPressed, rightPressed, onLeftHoldChange, onRightHoldChange, ...oledState } = props;
+  const { leftAngle, rightAngle, onLeftRotate, onRightRotate, onLeftCenter, onRightCenter, leftPressed, rightPressed, onLeftHoldChange, onRightHoldChange, reveal, ...oledState } = props;
   return (
-    <div
-      className="absolute overflow-clip rounded-[88px]"
-      style={{ left: 224, top: 213, width: 634, height: 178, background: '#e6e6e6' }}
-    >
-      {/* Pill shape border (matches Figma TapeControls SVG) */}
+    <div className="absolute overflow-clip rounded-[88px]" style={{ left: 224, top: 213, width: 634, height: 178 }}>
+      {/* Full-width OLED panel sitting BEHIND the plastic — its central columns
+          are covered bright by the front window; its far edges only show when the
+          plastic is see-through (transparent/naked), as the real panel is wider
+          than its window. Same size/scale as the front canvas so pixels align. */}
+      {reveal && (
+        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 241.7, height: 60.26 }}>
+          <OledCanvas draw={(ctx) => drawOledScreen(ctx, oledState)} />
+        </div>
+      )}
+
+      {/* Pill plastic (fill + border) — themed; opaque hides the panel edges */}
+      <div className="absolute inset-0 rounded-[88px]" style={{ background: 'var(--shell-body)' }} />
       <svg className="absolute block inset-0 size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 634 178">
-        <path d={svgPaths.p3c4202f0} fill="var(--fill-0, #E6E6E6)" stroke="var(--stroke-0, #202020)" strokeWidth="3" />
+        <path d={svgPaths.p3c4202f0} fill="var(--shell-body)" stroke="var(--shell-stroke)" strokeWidth="3" />
       </svg>
 
       {/* Left wheel — SCRUB */}
@@ -297,11 +325,11 @@ function Holes() {
   return (
     <div className="absolute bottom-[19px] h-[56px] left-[257px] w-[567px]" data-name="Holes">
       <svg className="absolute block inset-0 size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 567 56">
-        <g>
-          <circle cx="28" cy="28" fill="#202020" r="28" />
-          <circle cx="539" cy="28" fill="#202020" r="28" />
-          <rect fill="#202020" height="38" rx="6" width="38" x="112" />
-          <rect fill="#202020" height="38" rx="6" width="38" x="417" />
+        <g fill="var(--shell-detail)">
+          <circle cx="28" cy="28" r="28" />
+          <circle cx="539" cy="28" r="28" />
+          <rect height="38" rx="6" width="38" x="112" />
+          <rect height="38" rx="6" width="38" x="417" />
         </g>
       </svg>
     </div>
@@ -313,14 +341,14 @@ function Bump() {
     <div className="absolute contents left-[173px] top-[511px]">
       <div className="absolute h-[151px] left-[173px] top-[511px] w-[735px]">
         <svg className="absolute block inset-0 size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 735 151">
-          <path d={svgPaths.pa8f1480} stroke="#202020" strokeWidth="3" />
+          <path d={svgPaths.pa8f1480} stroke="var(--shell-stroke)" strokeWidth="3" />
         </svg>
       </div>
       <Holes />
       <div className="-translate-x-1/2 absolute bottom-[102px] left-1/2 overflow-clip size-[36px]">
         <div className="absolute left-0 size-[36px] top-0">
           <svg className="absolute block inset-0 size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 36 36">
-            <path d={svgPaths.p1a047080} fill="#202020" />
+            <path d={svgPaths.p1a047080} fill="var(--shell-detail)" />
           </svg>
         </div>
       </div>
@@ -333,7 +361,7 @@ function Screws() {
     <div className={`${className} overflow-clip size-[36px]`}>
       <div className="absolute left-0 size-[36px] top-0">
         <svg className="absolute block inset-0 size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 36 36">
-          <path d={svgPaths.p1a047080} fill="#202020" />
+          <path d={svgPaths.p1a047080} fill="var(--shell-detail)" />
         </svg>
       </div>
     </div>
@@ -466,7 +494,7 @@ function CoverLabel() {
   );
 }
 
-function CoverArea() {
+function CoverArea({ label }: { label: LabelStyle }) {
   return (
     <div
       className="absolute overflow-clip"
@@ -485,6 +513,20 @@ function CoverArea() {
         maskComposite: 'intersect',
       }}
     >
+      {/* A dropped-in SVG label fills the whole cover silhouette; the built-in
+          "Classic" style (svg undefined) falls through to the printed artwork. */}
+      {label.svg ? (
+        <img src={label.svg} alt="" aria-hidden style={{ width: 958, height: 426, objectFit: 'cover', display: 'block' }} />
+      ) : (
+        <ClassicCoverArt />
+      )}
+    </div>
+  );
+}
+
+function ClassicCoverArt() {
+  return (
+    <>
       {/* Rainbow stripes */}
       <div className="absolute content-stretch flex flex-col inset-[0.5px_-0.5px_-254.5px_0.5px] items-start">
         <RainbowStripes />
@@ -507,7 +549,7 @@ function CoverArea() {
 
       {/* SPEED label (bottom right) */}
       <SpeedLabel />
-    </div>
+    </>
   );
 }
 
@@ -515,7 +557,7 @@ function CoverOutline() {
   return (
     <div className="absolute h-[426px] left-[62px] right-[60px] top-[56px]">
       <div className="absolute inset-[-0.35%_-0.16%]">
-        <svg className="block size-full rounded-[0px] m-[0px]" fill="none" preserveAspectRatio="none" viewBox="0 0 961 429"><path></path><path d={svgPaths.pbd08600} stroke="#202020" strokeWidth="3" /></svg>
+        <svg className="block size-full rounded-[0px] m-[0px]" fill="none" preserveAspectRatio="none" viewBox="0 0 961 429"><path></path><path d={svgPaths.pbd08600} stroke="var(--shell-stroke)" strokeWidth="3" /></svg>
       </div>
     </div>
   );
@@ -800,6 +842,37 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(true);
   const [guideOpen, setGuideOpen] = useState(false);
 
+  // Shell appearance: plastic colour + label style, chosen in the customize
+  // carousel and remembered across reloads.
+  const [customizeMode, setCustomizeMode] = useState(false);
+  const [plasticId, setPlasticId] = useState<string>(() => localStorage.getItem('k7-plastic') ?? 'offwhite');
+  const [labelId, setLabelId] = useState<string>(() => localStorage.getItem('k7-label') ?? 'classic');
+  useEffect(() => { localStorage.setItem('k7-plastic', plasticId); }, [plasticId]);
+  useEffect(() => { localStorage.setItem('k7-label', labelId); }, [labelId]);
+  const plastic = plasticById(plasticId);
+  const label = labelById(LABEL_STYLES, labelId);
+  const cycleShell = useCallback((dir: number) => setPlasticId((cur) => {
+    const i = Math.max(0, PLASTIC_THEMES.findIndex((t) => t.id === cur));
+    return PLASTIC_THEMES[(i + dir + PLASTIC_THEMES.length) % PLASTIC_THEMES.length].id;
+  }), []);
+  const cycleLabel = useCallback((dir: number) => setLabelId((cur) => {
+    const i = Math.max(0, LABEL_STYLES.findIndex((s) => s.id === cur));
+    return LABEL_STYLES[(i + dir + LABEL_STYLES.length) % LABEL_STYLES.length].id;
+  }), []);
+  // In customize mode: ← → flip the shell, ↑ ↓ flip the label, Enter/Esc done.
+  useEffect(() => {
+    if (!customizeMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') { e.preventDefault(); cycleShell(-1); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); cycleShell(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); cycleLabel(-1); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); cycleLabel(1); }
+      else if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); setCustomizeMode(false); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [customizeMode, cycleShell, cycleLabel]);
+
   // Real-size resize tool (desktop): manualScale overrides the auto fit-scale
   const [resizeMode, setResizeMode] = useState(false);
   const [manualScale, setManualScale] = useState<number | null>(null);
@@ -1052,7 +1125,7 @@ export default function App() {
   //  · menuOpen — the on-device menu is up: arrows browse, tapLeft selects,
   //    tapRight/Escape leaves. Otherwise the wheels do their normal thing.
   const latestValue = {
-    guideBlocked: guideOpen,
+    guideBlocked: guideOpen || customizeMode,
     menuOpen,
     rotateLeft: handleLeftRotate,
     rotateRight: handleRightRotate,
@@ -1232,11 +1305,14 @@ export default function App() {
         touchAction: 'none',
       }}
     >
-      {/* Discreet trigger: controls guide (the song menu lives on the device —
-          both wheels together open it). */}
-      <div style={{ position: 'absolute', top: 14, left: '50%', transform: 'translateX(-50%)', zIndex: 20, display: 'flex', gap: 10 }}>
-        <TopTrigger icon="?" label="CONTROLS" onClick={() => { setMenuOpen(false); setGuideOpen(true); }} />
-      </div>
+      {/* Discreet triggers: skin customiser + controls guide (the song menu
+          lives on the device — both wheels together open it). */}
+      {!customizeMode && (
+        <div style={{ position: 'absolute', top: 14, left: '50%', transform: 'translateX(-50%)', zIndex: 20, display: 'flex', gap: 10 }}>
+          <TopTrigger icon="◑" label="SKIN" onClick={() => { setMenuOpen(false); setGuideOpen(false); setCustomizeMode(true); }} />
+          <TopTrigger icon="?" label="CONTROLS" onClick={() => { setMenuOpen(false); setGuideOpen(true); }} />
+        </div>
+      )}
 
       {/* Real-size resize tool (desktop only) */}
       {!isMobile && (
@@ -1274,14 +1350,30 @@ export default function App() {
             position: 'absolute',
             top: '50%',
             left: '50%',
-          }}
+            // Active shell theme drives every moulded part via these vars.
+            '--shell-body': plastic.body,
+            '--shell-stroke': plastic.stroke,
+            '--shell-detail': plastic.detail,
+            '--shell-wheel': plastic.wheel,
+          } as React.CSSProperties}
         >
+          {/* Internal build, revealed through a transparent / naked shell */}
+          {plastic.reveal && INTERNALS_URL && (
+            <img
+              src={INTERNALS_URL}
+              alt=""
+              aria-hidden
+              className="absolute pointer-events-none"
+              style={{ left: 3, top: 3, width: 1074, height: 656, objectFit: 'contain' }}
+            />
+          )}
+
           {/* Cassette BG */}
           <div
-            className="absolute bg-[#e6e6e6] rounded-[44px]"
+            className="absolute bg-[var(--shell-body)] rounded-[44px]"
             style={{ height: 656, left: 3, top: 3, width: 1074 }}
           >
-            <div aria-hidden className="absolute border-[3px] border-[#202020] border-solid inset-[-3px] pointer-events-none rounded-[47px]" />
+            <div aria-hidden className="absolute border-[3px] border-[var(--shell-stroke)] border-solid inset-[-3px] pointer-events-none rounded-[47px]" />
           </div>
 
           {/* Bump (bottom tab) */}
@@ -1290,8 +1382,8 @@ export default function App() {
           {/* Corner screws */}
           <Screws />
 
-          {/* Cover with label */}
-          <CoverArea />
+          {/* Cover with label (swappable sticker; hidden on a naked shell) */}
+          {!plastic.hideLabel && <CoverArea label={label} />}
 
           {/* Cover outline */}
           <CoverOutline />
@@ -1317,6 +1409,7 @@ export default function App() {
             playing={audio.isPlaying}
             marqueeSince={marqueeSinceRef.current}
             menu={oledMenu}
+            reveal={plastic.reveal}
           />
         </div>
       </div>
@@ -1336,9 +1429,95 @@ export default function App() {
         </div>
       )}
 
+      {customizeMode && (
+        <CustomizeOverlay
+          shellName={plastic.name}
+          labelName={label.name}
+          onShell={cycleShell}
+          onLabel={cycleLabel}
+          onDone={() => setCustomizeMode(false)}
+        />
+      )}
+
       {guideOpen && (
         <ControlsModal isMobile={isMobile} onClose={() => setGuideOpen(false)} />
       )}
+    </div>
+  );
+}
+
+// ─── Customize (skin) mode — a flat carousel over the live cassette ─────────
+// Horizontal arrows flip the shell, vertical arrows flip the label; the cassette
+// behind updates live. Confirm with Done (or Enter/Esc).
+
+interface CustomizeOverlayProps {
+  shellName: string;
+  labelName: string;
+  onShell: (dir: number) => void;
+  onLabel: (dir: number) => void;
+  onDone: () => void;
+}
+
+function CarouselArrow({ glyph, onClick, style }: { glyph: string; onClick: () => void; style: React.CSSProperties }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={glyph}
+      style={{
+        position: 'absolute', width: 52, height: 52, borderRadius: '50%',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(160,136,64,0.55)',
+        color: '#e8961c', fontSize: 24, lineHeight: 1, cursor: 'pointer',
+        backdropFilter: 'blur(4px)', pointerEvents: 'auto',
+        transition: 'color 0.15s, border-color 0.15s, transform 0.1s',
+        ...style,
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#e8961c'; e.currentTarget.style.transform = (style.transform ?? '') + ' scale(1.08)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(160,136,64,0.55)'; e.currentTarget.style.transform = style.transform ?? ''; }}
+    >
+      {glyph}
+    </button>
+  );
+}
+
+function CustomizeOverlay({ shellName, labelName, onShell, onLabel, onDone }: CustomizeOverlayProps) {
+  const cap = { fontFamily: "'Space Mono', monospace", color: '#a08840', textTransform: 'uppercase', letterSpacing: 2 } as const;
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 25, background: 'rgba(6,5,4,0.34)', pointerEvents: 'auto' }}>
+      {/* Title */}
+      <div style={{ position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)', textAlign: 'center', ...cap, fontSize: 11, color: '#e8961c' }}>
+        Customize
+      </div>
+
+      {/* Shell — horizontal arrows at the sides */}
+      <CarouselArrow glyph="‹" onClick={() => onShell(-1)} style={{ left: 24, top: '50%', transform: 'translateY(-50%)' }} />
+      <CarouselArrow glyph="›" onClick={() => onShell(1)} style={{ right: 24, top: '50%', transform: 'translateY(-50%)' }} />
+
+      {/* Label — vertical arrows at top/bottom */}
+      <CarouselArrow glyph="▲" onClick={() => onLabel(-1)} style={{ top: 44, left: '50%', transform: 'translateX(-50%)' }} />
+      <CarouselArrow glyph="▼" onClick={() => onLabel(1)} style={{ bottom: 66, left: '50%', transform: 'translateX(-50%)' }} />
+
+      {/* Current selection HUD (bottom-left, clear of the cassette centre) */}
+      <div style={{ position: 'absolute', left: 22, bottom: 18, ...cap, fontSize: 12, lineHeight: 1.9 }}>
+        <div><span style={{ color: '#8a8a7e', fontSize: 9 }}>SHELL&nbsp;‹›&nbsp;</span>{shellName}</div>
+        <div><span style={{ color: '#8a8a7e', fontSize: 9 }}>LABEL&nbsp;▲▼&nbsp;</span>{labelName}</div>
+      </div>
+
+      {/* Done */}
+      <button
+        onClick={onDone}
+        style={{
+          position: 'absolute', bottom: 18, right: 18, pointerEvents: 'auto',
+          padding: '9px 20px', borderRadius: 999, cursor: 'pointer',
+          background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(160,136,64,0.55)',
+          color: '#e8961c', fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 3,
+          textTransform: 'uppercase', backdropFilter: 'blur(4px)',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#e8961c'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(160,136,64,0.55)'; }}
+      >
+        ✓ Done
+      </button>
     </div>
   );
 }

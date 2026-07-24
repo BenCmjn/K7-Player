@@ -113,13 +113,13 @@ export function CassetteWheel({ rotationAngle, onRotate, onCenterClick, side, fo
           {/* Outer circle stroke */}
           <div className="absolute left-[3px] size-[118px] top-[3px]">
             <svg className="absolute block inset-0 size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 118 118">
-              <circle cx="59" cy="59" r="57.5" stroke="#202020" strokeWidth="3" />
+              <circle cx="59" cy="59" r="57.5" stroke="var(--shell-wheel, #202020)" strokeWidth="3" />
             </svg>
           </div>
           {/* Reel hub (pencil hole gear shape) */}
           <div className="absolute h-[88px] left-[18px] top-[18px] w-[87.316px]">
             <svg className="absolute block inset-0 size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 87.3164 88">
-              <path d={REEL_HUB_PATH} fill="#202020" />
+              <path d={REEL_HUB_PATH} fill="var(--shell-wheel, #202020)" />
             </svg>
           </div>
         </div>
