@@ -269,12 +269,23 @@ export type OledScreenMode =
   | 'normal-speed'
   | 'scrub-bwd'
   | 'scrub-fwd'
-  | 'menu';
+  | 'menu'
+  | 'deck-mode';
 
 export interface OledMenu {
   folder: string;   // top caption (e.g. the collection name)
   current: string;  // highlighted entry, drawn big
   next: string;     // preview of the following entry
+}
+
+/**
+ * The active deck mode, mirrored from App's DECK_SPEC. One shape covers every
+ * mode present and future, so adding loop/eq needs no change in this file.
+ */
+export interface OledDeck {
+  label: string;  // big value on the mode banner ('Deck' | 'Scrub' | 'Speed')
+  icon: string;   // ICONS key, or 'scrub-arrows' for the drawn double-arrows
+  tag: string;    // <=3-char chip kept on the resting Playing screen ('' = none)
 }
 
 export interface OledScreenState {
@@ -287,10 +298,11 @@ export interface OledScreenState {
   playing: boolean; // drives the Playing screen's pause badge + frozen waveform
   marqueeSince: number; // performance.now() when this screen/item appeared (marquee hold)
   menu?: OledMenu;
+  deck?: OledDeck;
 }
 
 const INVERTED_MODES: ReadonlySet<OledScreenMode> = new Set([
-  'chipmunk', 'slow', 'normal-speed', 'scrub-bwd', 'scrub-fwd',
+  'chipmunk', 'slow', 'normal-speed', 'scrub-bwd', 'scrub-fwd', 'deck-mode',
 ]);
 
 // Shared layout (matches the Figma frames): 24px icon at (8,4), text column at
@@ -391,8 +403,21 @@ export function drawOledScreen(ctx: CanvasRenderingContext2D, s: OledScreenState
       // the same px/s as the marquee so the two move together.
       const time = `${fmtTime(s.currentTime)}/${fmtTime(s.duration)}`;
       drawText(ctx, 2, 0, time, 1);
+      let right = OLED_W - 2;
+      // Deck-mode chip. The mode is sticky and outlives its banner, so the
+      // resting screen has to keep saying which verb the right wheel carries.
+      // Inverted so it reads as a state, not as data. Empty in base mode.
+      const tag = s.deck?.tag;
+      if (tag) {
+        const w = textWidth(tag, 1) + 3;
+        ctx.fillRect(right - w, 0, w, 7);
+        ctx.fillStyle = bg;
+        drawText(ctx, right - w + 2, 0, tag, 1);
+        ctx.fillStyle = fg;
+        right -= w + 3;
+      }
       const badge = s.playing ? fmtRateBadge(s.playbackRate) : 'pause';
-      drawText(ctx, OLED_W - textWidth(badge, 1) - 2, 0, badge, 1);
+      drawText(ctx, right - textWidth(badge, 1), 0, badge, 1);
       drawMarquee(ctx, 0, 8, OLED_W, track, 2, false, s.marqueeSince);
       drawWaveform(ctx, s.playing ? (now / 1000) * MARQUEE_SPEED : 0);
       break;
@@ -406,6 +431,17 @@ export function drawOledScreen(ctx: CanvasRenderingContext2D, s: OledScreenState
       drawText(ctx, TEXT_X, 10, fwd ? 'Forward!' : 'Rewind!', 2);
       // Waveform streaks fast, the way the tape is shuttling.
       drawWaveform(ctx, (now / 1000) * MARQUEE_SPEED * 4 * (fwd ? 1 : -1));
+      break;
+    }
+
+    case 'deck-mode': {
+      // Flashed by the Combo. Same geometry as drawIconScreen, but the icon may
+      // be the drawn scrub arrows rather than a baked ICONS entry.
+      const d = s.deck ?? { label: 'Deck', icon: 'music', tag: '' };
+      if (d.icon === 'scrub-arrows') drawScrubArrows(ctx, ICON_X, ICON_Y, true);
+      else drawIcon(ctx, d.icon, ICON_X, ICON_Y);
+      drawText(ctx, TEXT_X, 0, 'mode', 1);
+      drawText(ctx, TEXT_X, 7, d.label, 3);
       break;
     }
 

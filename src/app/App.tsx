@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { CassetteWheel } from './components/CassetteWheel';
-import { OledCanvas, drawOledScreen, type OledScreenMode, type OledMenu } from './components/OledScreen';
+import { OledCanvas, drawOledScreen, type OledScreenMode, type OledMenu, type OledDeck } from './components/OledScreen';
 import svgPaths from '../imports/Cassette/svg-kn4si39m8f';
 import { imgCover } from '../imports/Cassette/svg-58mld';
 import qrNetlify from '../assets/qr-netlify.svg';
@@ -60,8 +60,8 @@ const DEFAULT_MEGAMIX: Megamix | undefined =
   MEGAMIXES.find((m) => /rebirth/i.test(m.name)) ?? MEGAMIXES[0];
 
 // The on-device menu browses a small tree: Hello (home) → folder list → tracks.
-// There's one folder for now ("Library"); the structure lets "both wheels = go
-// up a level" climb tracks → folders → Hello, and lets more folders be added.
+// There's one folder for now ("Library"); the structure lets the left tap climb
+// tracks → folders → Hello, and lets more folders be added.
 interface Folder { name: string; tracks: Megamix[]; }
 const FOLDERS: Folder[] = [{ name: 'Library', tracks: MEGAMIXES }];
 
@@ -233,6 +233,7 @@ interface OledProps {
   playing: boolean;
   marqueeSince: number;
   menu?: OledMenu;
+  deck?: OledDeck;
 }
 
 interface TapeControlsProps extends OledProps {
@@ -269,7 +270,7 @@ function InteractiveTapeControls(props: TapeControlsProps) {
         <path d={svgPaths.p3c4202f0} fill="var(--shell-body)" stroke="var(--shell-stroke)" strokeWidth="3" />
       </svg>
 
-      {/* Left wheel — SCRUB */}
+      {/* Left wheel — BACK (tap) + base-layer modifier (hold) */}
       <CassetteWheel
         side="left"
         rotationAngle={leftAngle}
@@ -306,7 +307,7 @@ function InteractiveTapeControls(props: TapeControlsProps) {
         </div>
       </div>
 
-      {/* Right wheel — SPEED */}
+      {/* Right wheel — the action: volume / scrub / speed per deck mode */}
       <CassetteWheel
         side="right"
         rotationAngle={rightAngle}
@@ -662,6 +663,71 @@ function DimensionLines() {
 // (browse the tracklist right on the deck with the wheel — see the 'menu' mode
 // in OledScreen and the menu wiring below in App).
 
+// ─── Deck modes ────────────────────────────────────────────────────────────
+// A sticky overlay on the PLAY context, cycled by the Combo (both wheel centres
+// held together for COMBO_MS). It never expires on a timer — only the next
+// Combo changes it.
+//
+// The paradigm in one line: the LEFT wheel is navigation and modifier (tap =
+// back, hold = reach the base controls from anywhere), the RIGHT wheel is the
+// action, and a mode only changes which verb that action carries. Taps keep
+// their meaning across modes, except 'speed', which spends its right tap on
+// resetting the rate.
+//
+// Adding a mode (loop, eq…) = one entry in DeckMode + DECK_ORDER and one row
+// here. Only a genuinely new rotation verb also needs a WheelVerb + a case in
+// applyWheel. The OLED banner, the sticky chip and the caption strip all read
+// the row you just added. `left` is 'none' throughout today — that slot is
+// reserved for eq ("left = x axis, right = y axis") and loop.
+//
+// Historical note: the shell is silkscreened SCRUB (left) and SPEED (right).
+// Those printed labels name the two advanced modes, though in this paradigm it
+// is the right wheel that executes both. Artwork deliberately left alone.
+
+type DeckMode = 'base' | 'scrub' | 'speed';        // future: | 'loop' | 'eq'
+type WheelVerb = 'none' | 'volume' | 'scrub' | 'speed';
+type TapVerb = 'play-pause' | 'reset-speed';
+
+interface DeckModeSpec {
+  left: WheelVerb;
+  right: WheelVerb;
+  rightTap: TapVerb;
+  label: string;   // big value on the mode banner
+  icon: string;    // ICONS key, or 'scrub-arrows' (drawn, not baked into ICONS)
+  tag: string;     // <=3-char chip on the resting Playing screen ('' = none)
+  hint: { touch: string; keys: string }; // bottom caption strip, per platform
+}
+
+const DECK_ORDER: readonly DeckMode[] = ['base', 'scrub', 'speed'];
+const COMBO_MS = 400;   // hold both centres this long to cycle the mode
+
+const DECK_SPEC: Record<DeckMode, DeckModeSpec> = {
+  base: {
+    left: 'none', right: 'volume', rightTap: 'play-pause',
+    label: 'Deck', icon: 'music', tag: '',
+    hint: {
+      touch: 'Tap left = menu · tap right = play · turn right = volume',
+      keys: 'A = menu · S = play/pause · ↑↓ = volume',
+    },
+  },
+  scrub: {
+    left: 'none', right: 'scrub', rightTap: 'play-pause',
+    label: 'Scrub', icon: 'scrub-arrows', tag: 'SCR',
+    hint: {
+      touch: 'Scrub mode · turn right = scrub · tap right = play',
+      keys: 'Scrub mode · ↑↓ = scrub · S = play/pause',
+    },
+  },
+  speed: {
+    left: 'none', right: 'speed', rightTap: 'reset-speed',
+    label: 'Speed', icon: 'speed-fast', tag: 'SPD',
+    hint: {
+      touch: 'Speed mode · turn right = speed · tap right = reset',
+      keys: 'Speed mode · ↑↓ = speed · S = reset',
+    },
+  },
+};
+
 // ─── Controls guide (same J-card modal, adapts to keyboard vs touch) ────────
 
 interface ControlRow {
@@ -671,14 +737,20 @@ interface ControlRow {
   touch: string;    // mobile: gesture phrase
 }
 
+// The canonical control map. A mode prerequisite belongs in `action`, never in
+// `touch` — `touch` is only rendered on mobile, so a desktop reader would
+// otherwise never learn that scrub and speed need their mode.
 const CONTROL_ROWS: ControlRow[] = [
-  { glyph: '⏯', action: 'Play · Pause', keys: ['A', '/', 'Space'], touch: 'Tap the left wheel' },
-  { glyph: '⟲', action: 'Reset speed', keys: ['S'], touch: 'Tap the right wheel' },
-  { glyph: '↔', action: 'Scrub · seek', keys: ['←', '/', '→'], touch: 'Scroll the left wheel' },
-  { glyph: '≈', action: 'Speed · chipmunk', keys: ['↑', '/', '↓'], touch: 'Scroll the right wheel' },
-  { glyph: '♪', action: 'Volume', keys: ['hold', 'A', '+', '↑', '/', '↓'], touch: 'Hold left + scroll right' },
-  { glyph: '☰', action: 'Songs menu · up', keys: ['A', '+', 'S'], touch: 'Tap both wheels' },
-  { glyph: '⏎', action: 'Songs menu · enter', keys: ['S'], touch: 'Tap the right wheel' },
+  { glyph: '⏯', action: 'Play · Pause', keys: ['S', '/', 'Space'], touch: 'Tap the right wheel' },
+  { glyph: '♪', action: 'Volume', keys: ['↑', '/', '↓'], touch: 'Turn the right wheel' },
+  { glyph: '☰', action: 'Menu · open · back', keys: ['A', '/', 'Esc'], touch: 'Tap the left wheel' },
+  { glyph: '⏎', action: 'Menu · enter · play', keys: ['S'], touch: 'Tap the right wheel' },
+  { glyph: '⇅', action: 'Menu · browse', keys: ['←', '/', '→'], touch: 'Turn either wheel' },
+  { glyph: '⊙', action: 'Deck mode · cycle', keys: ['hold', 'A', '+', 'S'], touch: 'Hold both wheels' },
+  { glyph: '↔', action: 'Scrub · seek (Scrub mode)', keys: ['↑', '/', '↓'], touch: 'Turn the right wheel' },
+  { glyph: '≈', action: 'Speed · pitch (Speed mode)', keys: ['↑', '/', '↓'], touch: 'Turn the right wheel' },
+  { glyph: '⟲', action: 'Reset speed (Speed mode)', keys: ['S'], touch: 'Tap the right wheel' },
+  { glyph: '⇧', action: 'Volume · play/pause anywhere', keys: ['hold', 'A', '+', '↑↓', '/', 'S'], touch: 'Hold left + turn/tap right' },
 ];
 
 function KeyToken({ token }: { token: string }) {
@@ -750,7 +822,7 @@ function ControlsModal({ isMobile, onClose }: ControlsModalProps) {
               Controls
             </div>
             <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: 1.5, color: '#202020', textTransform: 'uppercase', marginTop: 2 }}>
-              Type&nbsp;I (Normal) Position · {isMobile ? 'Tap · Scroll · Hold' : 'Keyboard shortcuts'}
+              Type&nbsp;I (Normal) Position · {isMobile ? 'Tap · Turn · Hold' : 'Keyboard shortcuts'}
             </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', width: 74 }}>
@@ -877,21 +949,36 @@ export default function App() {
   const [resizeMode, setResizeMode] = useState(false);
   const [manualScale, setManualScale] = useState<number | null>(null);
 
+  // Sticky deck mode — only the Combo changes it, never a timer. See DECK_SPEC.
+  const [deckMode, setDeckMode] = useState<DeckMode>('base');
+
   // Keyboard-driven "pressed" visuals + transient volume HUD
   const [leftPressed, setLeftPressed] = useState(false);
   const [rightPressed, setRightPressed] = useState(false);
-  // Touch/mouse hold on each wheel's center (bridges the same combos to touch + mouse-drag)
+  // Touch/mouse hold on each wheel's center (bridges the same gestures to touch + mouse-drag)
   const [leftHeldTouch, setLeftHeldTouch] = useState(false);
   const [rightHeldTouch, setRightHeldTouch] = useState(false);
   const leftHeld = leftPressed || leftHeldTouch;
   const rightHeld = rightPressed || rightHeldTouch;
-  // Suppresses the play/pause tap-toggle when the hold was actually used as the volume combo
-  const leftComboUsedRef = useRef(false);
+  // A pending tap the Combo or the base layer has already spent. Cleared when
+  // consumed, and again on that wheel's next press so it can never go stale and
+  // swallow an unrelated tap later.
+  const suppressLeftClickRef = useRef(false);
+  const suppressRightClickRef = useRef(false);
+  // Combo bookkeeping lives up here so the rotation handlers can cancel it.
+  const comboFiredRef = useRef(false);   // this gesture already cycled a mode
+  const comboTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelCombo = useCallback(() => {
+    if (comboTimerRef.current) { clearTimeout(comboTimerRef.current); comboTimerRef.current = null; }
+  }, []);
   const handleLeftHoldChange = useCallback((held: boolean) => {
-    if (held) leftComboUsedRef.current = false;
+    if (held) suppressLeftClickRef.current = false; // fresh press, clean slate
     setLeftHeldTouch(held);
   }, []);
-  const handleRightHoldChange = useCallback((held: boolean) => setRightHeldTouch(held), []);
+  const handleRightHoldChange = useCallback((held: boolean) => {
+    if (held) suppressRightClickRef.current = false;
+    setRightHeldTouch(held);
+  }, []);
   // OLED screen mode: the resting screen is 'playing' (playing or paused); a
   // wheel touch (mouse, touch, or keyboard) flashes a feedback screen — wheel
   // feedback for 1s, play/pause for 2s — then reverts.
@@ -967,11 +1054,12 @@ export default function App() {
   }, []);
 
   // ── On-device menu navigation ──────────────────────────────────────
-  // Controls (both wheels + keyboard A/S mirror each other):
-  //   · both centers together → climb one level (deck → track list → folders,
-  //     and above folders leaves the menu)
-  //   · right centre alone → enter the folder, or play the track & show Playing
-  //   · long-press right centre → jump straight back to the Playing screen
+  // Controls (wheels + keyboard A/S mirror each other):
+  //   · left centre → climb one level (tracks → folders → Hello), and from the
+  //     deck it opens the menu. Hello is the ceiling.
+  //   · right centre → enter the folder, or play the track & show Playing
+  //   · long-press right centre alone → back to Playing without starting a
+  //     track. With the Hello ceiling kept, this is the only such exit.
   //   · turn either wheel → move the highlight (accumulates MENU_STEP° per step)
   const MENU_STEP = 26;
   const menuAccumRef = useRef(0);
@@ -988,7 +1076,7 @@ export default function App() {
     setMenuOpen(true);
   }, [locateCurrent]);
 
-  // "Both wheels" — climb one level up the tree. Tracks → folders → Hello
+  // Left tap — climb one level up the tree. Tracks → folders → Hello
   // (root), and Hello is the ceiling: you can't go higher.
   const menuUp = useCallback(() => {
     if (!menuOpen) { enterMenu(); return; }
@@ -1050,53 +1138,90 @@ export default function App() {
     }
   }, [moveMenu]);
 
+  // The only path from a wheel to the audio engine. DECK_SPEC says which verb a
+  // wheel carries in the current mode; this says what each verb does.
+  const applyWheel = useCallback((verb: WheelVerb, delta: number) => {
+    switch (verb) {
+      case 'volume':
+        audio.adjustVolume(delta * 0.004);
+        triggerTransient('volume');
+        break;
+      case 'scrub':
+        audio.seek(delta * 0.07);
+        triggerTransient(delta > 0 ? 'scrub-fwd' : 'scrub-bwd');
+        break;
+      case 'speed': {
+        const next = Math.max(0.25, Math.min(4.0, audio.playbackRate + delta * 0.012));
+        audio.setRate(next);
+        triggerTransient(Math.abs(next - 1) < 0.03 ? 'normal-speed' : next > 1 ? 'chipmunk' : 'slow');
+        break;
+      }
+      case 'none':
+        break;
+    }
+  }, [audio, triggerTransient]);
+
+  // The reel always spins with the finger, in every context — only what that
+  // rotation *does* changes.
   const handleLeftRotate = useCallback((delta: number) => {
-    if (menuOpen) { scrollMenu(delta); setLeftAngle(a => a + delta); return; }
-    // Holding the left wheel down is the volume modifier — don't also scrub while held.
-    if (leftHeld) return;
-    audio.seek(delta * 0.07);
-    setLeftAngle(a => a + delta); // only visual, only on drag
-    triggerTransient(delta > 0 ? 'scrub-fwd' : 'scrub-bwd');
-  }, [audio, leftHeld, triggerTransient, menuOpen, scrollMenu]);
+    setLeftAngle(a => a + delta);
+    if (menuOpen) { scrollMenu(delta); return; }
+    applyWheel(DECK_SPEC[deckMode].left, delta); // 'none' in every mode today
+  }, [menuOpen, scrollMenu, applyWheel, deckMode]);
 
   const handleRightRotate = useCallback((delta: number) => {
+    setRightAngle(a => a + delta);
+    // Base layer first: holding the left wheel reaches volume from anywhere,
+    // including inside the menu. This test must stay ahead of the menu branch.
     if (leftHeld) {
-      // Left held + right wheel → volume, and it works everywhere (deck or menu).
-      audio.adjustVolume(delta * 0.004);
-      triggerTransient('volume');
-      leftComboUsedRef.current = true; // suppress the left tap-to-toggle-play once released
-    } else if (menuOpen) {
-      scrollMenu(delta); // browse the menu
-    } else {
-      const nextRate = Math.max(0.25, Math.min(4.0, audio.playbackRate + delta * 0.012));
-      audio.setRate(nextRate);
-      triggerTransient(Math.abs(nextRate - 1) < 0.03 ? 'normal-speed' : nextRate > 1 ? 'chipmunk' : 'slow');
+      cancelCombo();                       // turning means this isn't a Combo
+      applyWheel('volume', delta);
+      suppressLeftClickRef.current = true; // the left tap that follows is spent
+      return;
     }
-    setRightAngle(a => a + delta); // only visual, only on drag
-  }, [audio, leftHeld, triggerTransient, menuOpen, scrollMenu]);
+    if (menuOpen) { scrollMenu(delta); return; }
+    applyWheel(DECK_SPEC[deckMode].right, delta);
+  }, [leftHeld, cancelCombo, menuOpen, scrollMenu, applyWheel, deckMode]);
 
-  // Both centres pressed together climb the menu tree; the refs suppress the
-  // individual clicks that fire when each centre is released.
-  const suppressLeftClickRef = useRef(false);
-  const suppressRightClickRef = useRef(false);
-  const comboArmedRef = useRef(false);
+  // ── Combo ────────────────────────────────────────────────────────────────
+  // Both centres held together for COMBO_MS cycles the deck mode. Anything
+  // shorter is the base layer (hold left, then use the right wheel), so the two
+  // gestures share a start and are told apart purely by how long you hold.
+  // Holding rather than requiring two simultaneous taps is deliberate: you can
+  // land the second finger at your leisure, which is what makes this workable
+  // on a phone.
   const rightLongTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    if (leftHeld && rightHeld && !comboArmedRef.current) {
-      comboArmedRef.current = true;
-      suppressLeftClickRef.current = true;
-      suppressRightClickRef.current = true;
-      if (rightLongTimerRef.current) { clearTimeout(rightLongTimerRef.current); rightLongTimerRef.current = null; }
-      menuUp();
-    }
-    if (!leftHeld && !rightHeld) comboArmedRef.current = false;
-  }, [leftHeld, rightHeld, menuUp]);
+  const cycleDeckMode = useCallback(() => {
+    setDeckMode((m) => DECK_ORDER[(DECK_ORDER.indexOf(m) + 1) % DECK_ORDER.length]);
+    triggerTransient('deck-mode', 1400); // a deliberate switch earns a longer beat
+  }, [triggerTransient]);
 
-  // Long-press the right centre inside the menu → back to the Playing screen
-  // (without changing what's loaded or whether it's playing).
   useEffect(() => {
-    if (rightHeld && menuOpen && !comboArmedRef.current) {
+    if (leftHeld && rightHeld) {
+      if (!comboTimerRef.current && !comboFiredRef.current) {
+        comboTimerRef.current = setTimeout(() => {
+          comboTimerRef.current = null;
+          // comboFiredRef alone swallows both taps: it stays true until BOTH
+          // centres are up, and each tap fires while the other is still down.
+          // Setting the per-wheel flags here too would leave them armed (this
+          // check runs first and returns early), eating a later, innocent tap.
+          comboFiredRef.current = true;
+          cycleDeckMode();
+        }, COMBO_MS);
+      }
+    } else {
+      cancelCombo();
+      if (!leftHeld && !rightHeld) comboFiredRef.current = false; // re-arm once both are up
+    }
+  }, [leftHeld, rightHeld, cycleDeckMode, cancelCombo]);
+
+  // Long-press the right centre ALONE inside the menu → back to the Playing
+  // screen without changing what's loaded. Requires the left to be up, so it
+  // can never race the Combo. With the root ceiling kept, this is the only way
+  // out of the menu that doesn't start a track.
+  useEffect(() => {
+    if (rightHeld && !leftHeld && menuOpen) {
       rightLongTimerRef.current = setTimeout(() => {
         suppressRightClickRef.current = true;
         setMenuOpen(false);
@@ -1105,35 +1230,59 @@ export default function App() {
     return () => {
       if (rightLongTimerRef.current) { clearTimeout(rightLongTimerRef.current); rightLongTimerRef.current = null; }
     };
-  }, [rightHeld, menuOpen]);
+  }, [rightHeld, leftHeld, menuOpen]);
 
+  // A tap is swallowed while a two-wheel gesture is still in flight, or when the
+  // Combo / base layer already spent it. Each wheel also clears its own flag on
+  // its next press (see handleLeftHoldChange), so a flag can never go stale and
+  // eat an unrelated tap later.
+  const consumeTap = useCallback((ref: React.MutableRefObject<boolean>) => {
+    if (comboFiredRef.current) return true;
+    if (ref.current) { ref.current = false; return true; }
+    return false;
+  }, []);
+
+  // Left centre — always "back": opens the menu from the deck, climbs a level
+  // inside it, and stops at the Hello root.
   const handleLeftCenterClick = useCallback(() => {
-    if (suppressLeftClickRef.current) { suppressLeftClickRef.current = false; return; }
-    if (leftComboUsedRef.current) { leftComboUsedRef.current = false; return; }
-    togglePlayPause(); // play/pause from anywhere, menu included
-  }, [togglePlayPause]);
+    if (consumeTap(suppressLeftClickRef)) return;
+    menuUp();
+  }, [consumeTap, menuUp]);
 
+  // Right centre — the action tap. Its verb follows the deck mode, except while
+  // the left wheel is held, which always reaches base play/pause.
   const handleRightCenterClick = useCallback(() => {
-    if (suppressRightClickRef.current) { suppressRightClickRef.current = false; return; }
+    if (consumeTap(suppressRightClickRef)) return;
+    if (leftHeld) { // base layer, works in the menu and in every mode
+      cancelCombo();
+      suppressLeftClickRef.current = true; // the left tap that follows is spent
+      togglePlayPause();
+      return;
+    }
     if (menuOpen) { menuEnter(); return; } // enter folder / play track
-    audio.setRate(1.0);
-    triggerTransient('normal-speed');
-  }, [audio, menuOpen, menuEnter, triggerTransient]);
+    if (DECK_SPEC[deckMode].rightTap === 'reset-speed') {
+      audio.setRate(1.0);
+      triggerTransient('normal-speed');
+      return;
+    }
+    togglePlayPause();
+  }, [consumeTap, leftHeld, cancelCombo, togglePlayPause, menuOpen, menuEnter, deckMode, audio, triggerTransient]);
 
-  // Latest callbacks, read by the (mounted-once) keyboard listener.
-  //  · guideBlocked — the Controls modal is up, swallow everything.
-  //  · menuOpen — the on-device menu is up: arrows browse, tapLeft selects,
-  //    tapRight/Escape leaves. Otherwise the wheels do their normal thing.
+  // Latest callbacks, read by the (mounted-once) keyboard listener. There is no
+  // typecheck in this project, so a key added to the effect but forgotten here
+  // fails at runtime inside a raw listener — edit the two together.
   const latestValue = {
-    guideBlocked: guideOpen || customizeMode,
+    guideBlocked: guideOpen || customizeMode, // Controls modal up: swallow everything
     menuOpen,
     rotateLeft: handleLeftRotate,
     rotateRight: handleRightRotate,
-    spinRight: setRightAngle,
-    adjustVolume: audio.adjustVolume,
-    triggerTransient,
     tapLeft: handleLeftCenterClick,
     tapRight: handleRightCenterClick,
+    // A fresh press starts from a clean slate — the pointer path gets this via
+    // onHoldChange, so the keyboard has to do the same or a spent flag could
+    // outlive its gesture and swallow the next tap.
+    armLeftTap: () => { suppressLeftClickRef.current = false; },
+    armRightTap: () => { suppressRightClickRef.current = false; },
     playPause: togglePlayPause,
     menuMove: moveMenu,
     closeMenu,
@@ -1141,31 +1290,26 @@ export default function App() {
   const latest = useRef(latestValue);
   latest.current = latestValue;
 
-  // ── Keyboard controls ──────────────────────────────────────────────
-  //  A / S = tap the left / right wheel centre (play-pause / reset speed)
-  //  ← / → = turn the left wheel  (scrub)
-  //  ↑ / ↓ = turn the right wheel (speed)   ·   hold A + ↑/↓ = volume
+  // ── Keyboard controls — a plain mirror of the two wheels ───────────────────
+  //  A = tap the left centre   → back: opens the menu, climbs a level
+  //  S = tap the right centre  → enter/play in the menu, else the mode's tap
+  //  A held + S / ↑ / ↓        → base layer: play-pause, volume
+  //  A + S held for COMBO_MS   → the Combo: cycle the deck mode
+  //  ← / → turn the left wheel  ·  ↑ / ↓ turn the right wheel
+  //  Space = play/pause anywhere  ·  Esc = leave the menu
+  // Every verb is resolved by the shared wheel handlers, so the keyboard can't
+  // drift from the touch mapping.
   useEffect(() => {
     const held = new Set<string>();
-    let aDown = false;
-    let aCombo = false;
+    let aDown = false;             // only routes arrows; the base layer lives in leftHeld
     let timer: ReturnType<typeof setInterval> | null = null;
-    const ROT = 3;    // degrees per tick
-    const VOL = 0.02; // volume units per tick
+    const ROT = 3;                 // degrees per tick
     const isArrow = (k: string) =>
       k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown';
 
     const tick = () => {
       const c = latest.current;
       if (c.guideBlocked) return;
-      if (aDown) {
-        // Hold A + ↑/↓ = volume — works everywhere, menu included.
-        if (held.has('ArrowUp')) { c.adjustVolume(VOL); c.spinRight((a) => a + ROT); c.triggerTransient('volume'); aCombo = true; }
-        if (held.has('ArrowDown')) { c.adjustVolume(-VOL); c.spinRight((a) => a - ROT); c.triggerTransient('volume'); aCombo = true; }
-        if (held.has('ArrowLeft') || held.has('ArrowRight')) aCombo = true; // consumed by the combo
-        return;
-      }
-      if (c.menuOpen) return; // plain arrows in the menu are handled discretely on keydown
       if (held.has('ArrowLeft')) c.rotateLeft(-ROT);
       if (held.has('ArrowRight')) c.rotateLeft(ROT);
       if (held.has('ArrowUp')) c.rotateRight(ROT);
@@ -1188,21 +1332,25 @@ export default function App() {
       } else if (k === 'a' || k === 'A') {
         e.preventDefault();
         if (c.guideBlocked) return;
-        setLeftPressed(true);
-        if (e.repeat) return;
-        aDown = true; aCombo = false; // armed even in the menu (enables the volume combo)
+        aDown = true;
+        if (!e.repeat) c.armLeftTap();
+        setLeftPressed(true);  // held alongside S this becomes the Combo
       } else if (k === 's' || k === 'S') {
         e.preventDefault();
         if (c.guideBlocked) return;
-        setRightPressed(true); // acts on release, so A+S = both-centres combo works
+        if (!e.repeat) c.armRightTap();
+        setRightPressed(true); // acts on release, so A+S can arm the Combo first
       } else if (isArrow(k)) {
         e.preventDefault();
         if (c.guideBlocked) return;
+        // A plain arrow steps the menu highlight once per press. With A held it
+        // must go through the tick instead, so the base layer (hold left + turn
+        // right = volume) keeps working while browsing.
         if (c.menuOpen && !aDown) {
           if (!e.repeat) c.menuMove(k === 'ArrowDown' || k === 'ArrowRight' ? 1 : -1);
           return;
         }
-        held.add(k); // A-held volume combo runs through the tick, even in the menu
+        held.add(k);
         start();
       }
     };
@@ -1214,14 +1362,18 @@ export default function App() {
         e.preventDefault();
       } else if (k === 'a' || k === 'A') {
         e.preventDefault();
-        setLeftPressed(false);
-        if (c.guideBlocked) { aDown = false; return; }
-        if (aDown && !aCombo) c.tapLeft(); // play/pause (a clean tap, not the volume combo)
         aDown = false;
+        // Order matters. These are raw listeners, so React batches the state
+        // update into a microtask: the Combo effect has not run yet when
+        // tapLeft() fires, which is exactly why the tap still sees the
+        // suppress flags the Combo set. Call tapLeft() first and A+S would
+        // also open the menu.
+        setLeftPressed(false);
+        if (!c.guideBlocked) c.tapLeft();
       } else if (k === 's' || k === 'S') {
         e.preventDefault();
         setRightPressed(false);
-        if (!c.guideBlocked) c.tapRight(); // reset speed · enter/play in menu (suppressed after a combo)
+        if (!c.guideBlocked) c.tapRight();
       } else if (isArrow(k)) {
         held.delete(k);
         stopIfIdle();
@@ -1229,7 +1381,7 @@ export default function App() {
     };
 
     const onBlur = () => {
-      held.clear(); aDown = false; aCombo = false;
+      held.clear(); aDown = false;
       setLeftPressed(false); setRightPressed(false);
       if (timer) { clearInterval(timer); timer = null; }
     };
@@ -1306,7 +1458,7 @@ export default function App() {
       }}
     >
       {/* Discreet triggers: skin customiser + controls guide (the song menu
-          lives on the device — both wheels together open it). */}
+          lives on the device — the left wheel's centre opens it). */}
       {!customizeMode && (
         <div style={{ position: 'absolute', top: 14, left: '50%', transform: 'translateX(-50%)', zIndex: 20, display: 'flex', gap: 10 }}>
           <TopTrigger icon="◑" label="SKIN" onClick={() => { setMenuOpen(false); setGuideOpen(false); setCustomizeMode(true); }} />
@@ -1409,25 +1561,32 @@ export default function App() {
             playing={audio.isPlaying}
             marqueeSince={marqueeSinceRef.current}
             menu={oledMenu}
+            deck={DECK_SPEC[deckMode]}
             reveal={plastic.reveal}
           />
         </div>
       </div>
 
-      {menuOpen && (
-        <div
-          style={{
-            position: 'absolute', bottom: 18, left: '50%', transform: 'translateX(-50%)',
-            zIndex: 20, pointerEvents: 'none', textAlign: 'center',
-            fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 2,
-            color: '#a08840', textTransform: 'uppercase', whiteSpace: 'nowrap',
-          }}
-        >
-          {isMobile
-            ? 'Turn a wheel to browse · tap right to open/play · tap both to go up'
-            : 'Turn a wheel to browse · click right to open/play · click both (or Esc) to go up'}
-        </div>
-      )}
+      {/* Non-interactive hint strip. It covers both contexts, because the deck
+          mode is sticky and would otherwise be invisible on first use. The PLAY
+          text is read from DECK_SPEC.hint, so a new mode can't leave a stale
+          caption here. No nowrap: these lines are longer than the old menu-only
+          one and must be allowed to wrap on a phone. */}
+      <div
+        style={{
+          position: 'absolute', bottom: 18, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 20, pointerEvents: 'none', textAlign: 'center', maxWidth: '92vw',
+          fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 2,
+          color: '#a08840', textTransform: 'uppercase',
+        }}
+      >
+        {menuOpen
+          ? (isMobile
+              ? 'Turn to browse · tap right = open/play · tap left = back'
+              : 'Turn to browse · S = open/play · A = back · Esc = leave')
+          : `${isMobile ? DECK_SPEC[deckMode].hint.touch : DECK_SPEC[deckMode].hint.keys}`
+            + (isMobile ? ' · hold both = modes' : ' · hold A+S = modes')}
+      </div>
 
       {customizeMode && (
         <CustomizeOverlay
