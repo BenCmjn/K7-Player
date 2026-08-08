@@ -32,7 +32,12 @@ that file's own assets, baked into the player (see [Under the hood](#under-the-h
 ## Controls
 
 The device is driven by the two wheels; every gesture also has a keyboard
-shortcut. Open the on‑screen **Controls** card (top of the page) any time.
+shortcut. Nothing is spelled out on screen — poke at the wheels, or open the
+**Controls** card (top of the page) if you'd rather read the map.
+
+On the keyboard the arrows are semantic rather than a literal wheel mirror:
+`↑`/`↓` is the amount axis (volume, and the menu highlight) and `←`/`→` is the
+tape axis (scrub, speed). On the device both of those live on the right wheel.
 
 The idea in one line: the **left wheel is navigation** (tap = back, hold =
 reach the base controls from anywhere) and the **right wheel is the action**,
@@ -44,10 +49,10 @@ whose verb depends on the current deck mode.
 | Volume | `↑` / `↓` | Turn the right wheel |
 | Song menu · open / back | `A` / `Esc` | Tap the left wheel |
 | Song menu · enter / play | `S` | Tap the right wheel |
-| Song menu · browse | `←` / `→` | Turn either wheel |
+| Song menu · browse | `↑` / `↓` | Turn either wheel |
 | Deck mode · cycle | hold `A` + `S` | Hold both wheels |
-| Scrub · seek *(Scrub mode)* | `↑` / `↓` | Turn the right wheel |
-| Speed · chipmunk / slow *(Speed mode)* | `↑` / `↓` | Turn the right wheel |
+| Scrub · seek *(Scrub mode)* | `←` / `→` | Turn the right wheel |
+| Speed · chipmunk / slow *(Speed mode)* | `←` / `→` | Turn the right wheel |
 | Reset speed *(Speed mode)* | `S` | Tap the right wheel |
 | Volume · play/pause from anywhere | hold `A` + `↑`/`↓` or `S` | Hold left + turn/tap right |
 

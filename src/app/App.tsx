@@ -676,7 +676,7 @@ function DimensionLines() {
 //
 // Adding a mode (loop, eq…) = one entry in DeckMode + DECK_ORDER and one row
 // here. Only a genuinely new rotation verb also needs a WheelVerb + a case in
-// applyWheel. The OLED banner, the sticky chip and the caption strip all read
+// applyWheel. The OLED banner and the sticky chip both read
 // the row you just added. `left` is 'none' throughout today — that slot is
 // reserved for eq ("left = x axis, right = y axis") and loop.
 //
@@ -695,36 +695,23 @@ interface DeckModeSpec {
   label: string;   // big value on the mode banner
   icon: string;    // ICONS key, or 'scrub-arrows' (drawn, not baked into ICONS)
   tag: string;     // <=3-char chip on the resting Playing screen ('' = none)
-  hint: { touch: string; keys: string }; // bottom caption strip, per platform
 }
 
 const DECK_ORDER: readonly DeckMode[] = ['base', 'scrub', 'speed'];
-const COMBO_MS = 400;   // hold both centres this long to cycle the mode
+const COMBO_MS = 200;   // hold both centres this long to cycle the mode
 
 const DECK_SPEC: Record<DeckMode, DeckModeSpec> = {
   base: {
     left: 'none', right: 'volume', rightTap: 'play-pause',
     label: 'Deck', icon: 'music', tag: '',
-    hint: {
-      touch: 'Tap left = menu · tap right = play · turn right = volume',
-      keys: 'A = menu · S = play/pause · ↑↓ = volume',
-    },
   },
   scrub: {
     left: 'none', right: 'scrub', rightTap: 'play-pause',
     label: 'Scrub', icon: 'scrub-arrows', tag: 'SCR',
-    hint: {
-      touch: 'Scrub mode · turn right = scrub · tap right = play',
-      keys: 'Scrub mode · ↑↓ = scrub · S = play/pause',
-    },
   },
   speed: {
     left: 'none', right: 'speed', rightTap: 'reset-speed',
     label: 'Speed', icon: 'speed-fast', tag: 'SPD',
-    hint: {
-      touch: 'Speed mode · turn right = speed · tap right = reset',
-      keys: 'Speed mode · ↑↓ = speed · S = reset',
-    },
   },
 };
 
@@ -745,10 +732,10 @@ const CONTROL_ROWS: ControlRow[] = [
   { glyph: '♪', action: 'Volume', keys: ['↑', '/', '↓'], touch: 'Turn the right wheel' },
   { glyph: '☰', action: 'Menu · open · back', keys: ['A', '/', 'Esc'], touch: 'Tap the left wheel' },
   { glyph: '⏎', action: 'Menu · enter · play', keys: ['S'], touch: 'Tap the right wheel' },
-  { glyph: '⇅', action: 'Menu · browse', keys: ['←', '/', '→'], touch: 'Turn either wheel' },
+  { glyph: '⇅', action: 'Menu · browse', keys: ['↑', '/', '↓'], touch: 'Turn either wheel' },
   { glyph: '⊙', action: 'Deck mode · cycle', keys: ['hold', 'A', '+', 'S'], touch: 'Hold both wheels' },
-  { glyph: '↔', action: 'Scrub · seek (Scrub mode)', keys: ['↑', '/', '↓'], touch: 'Turn the right wheel' },
-  { glyph: '≈', action: 'Speed · pitch (Speed mode)', keys: ['↑', '/', '↓'], touch: 'Turn the right wheel' },
+  { glyph: '↔', action: 'Scrub · seek (Scrub mode)', keys: ['←', '/', '→'], touch: 'Turn the right wheel' },
+  { glyph: '≈', action: 'Speed · pitch (Speed mode)', keys: ['←', '/', '→'], touch: 'Turn the right wheel' },
   { glyph: '⟲', action: 'Reset speed (Speed mode)', keys: ['S'], touch: 'Tap the right wheel' },
   { glyph: '⇧', action: 'Volume · play/pause anywhere', keys: ['hold', 'A', '+', '↑↓', '/', 'S'], touch: 'Hold left + turn/tap right' },
 ];
@@ -1183,6 +1170,35 @@ export default function App() {
     applyWheel(DECK_SPEC[deckMode].right, delta);
   }, [leftHeld, cancelCombo, menuOpen, scrollMenu, applyWheel, deckMode]);
 
+  // ── Keyboard axes ─────────────────────────────────────────────────────────
+  // The arrows are SEMANTIC rather than a literal wheel mirror, because that is
+  // what reads naturally on a keyboard: up/down is the "amount" axis (volume,
+  // and the highlight in a vertical menu), left/right is the tape axis (shuttle
+  // and rate, which run along a horizontal tape). The device itself is
+  // unchanged — both verbs still live on the right wheel — so both axes spin
+  // the right reel.
+  const keyAmount = useCallback((delta: number) => {
+    setRightAngle(a => a + delta);
+    if (leftHeld) { // base layer: volume, even while browsing
+      cancelCombo();
+      applyWheel('volume', delta);
+      suppressLeftClickRef.current = true;
+      return;
+    }
+    if (menuOpen) { scrollMenu(delta); return; }
+    applyWheel('volume', delta); // volume in every deck mode, no modifier needed
+  }, [leftHeld, cancelCombo, menuOpen, scrollMenu, applyWheel]);
+
+  const keyTape = useCallback((delta: number) => {
+    if (leftHeld) { cancelCombo(); return; } // not a defined gesture
+    if (menuOpen) return;                    // nothing to shuttle while browsing
+    setRightAngle(a => a + delta);
+    // In base the right wheel's verb IS volume, which belongs to the other
+    // axis — so this axis is idle until a mode puts something on it.
+    const verb = DECK_SPEC[deckMode].right;
+    applyWheel(verb === 'volume' ? 'none' : verb, delta);
+  }, [leftHeld, cancelCombo, menuOpen, applyWheel, deckMode]);
+
   // ── Combo ────────────────────────────────────────────────────────────────
   // Both centres held together for COMBO_MS cycles the deck mode. Anything
   // shorter is the base layer (hold left, then use the right wheel), so the two
@@ -1274,8 +1290,8 @@ export default function App() {
   const latestValue = {
     guideBlocked: guideOpen || customizeMode, // Controls modal up: swallow everything
     menuOpen,
-    rotateLeft: handleLeftRotate,
-    rotateRight: handleRightRotate,
+    keyAmount,
+    keyTape,
     tapLeft: handleLeftCenterClick,
     tapRight: handleRightCenterClick,
     // A fresh press starts from a clean slate — the pointer path gets this via
@@ -1290,15 +1306,16 @@ export default function App() {
   const latest = useRef(latestValue);
   latest.current = latestValue;
 
-  // ── Keyboard controls — a plain mirror of the two wheels ───────────────────
+  // ── Keyboard controls ─────────────────────────────────────────────────────
   //  A = tap the left centre   → back: opens the menu, climbs a level
   //  S = tap the right centre  → enter/play in the menu, else the mode's tap
   //  A held + S / ↑ / ↓        → base layer: play-pause, volume
   //  A + S held for COMBO_MS   → the Combo: cycle the deck mode
-  //  ← / → turn the left wheel  ·  ↑ / ↓ turn the right wheel
+  //  ↑ / ↓ = the amount axis (volume · menu highlight)
+  //  ← / → = the tape axis    (scrub · speed, per deck mode)
   //  Space = play/pause anywhere  ·  Esc = leave the menu
-  // Every verb is resolved by the shared wheel handlers, so the keyboard can't
-  // drift from the touch mapping.
+  // The taps mirror the wheels exactly; the arrows are deliberately semantic
+  // instead (see keyAmount / keyTape).
   useEffect(() => {
     const held = new Set<string>();
     let aDown = false;             // only routes arrows; the base layer lives in leftHeld
@@ -1310,10 +1327,10 @@ export default function App() {
     const tick = () => {
       const c = latest.current;
       if (c.guideBlocked) return;
-      if (held.has('ArrowLeft')) c.rotateLeft(-ROT);
-      if (held.has('ArrowRight')) c.rotateLeft(ROT);
-      if (held.has('ArrowUp')) c.rotateRight(ROT);
-      if (held.has('ArrowDown')) c.rotateRight(-ROT);
+      if (held.has('ArrowUp')) c.keyAmount(ROT);
+      if (held.has('ArrowDown')) c.keyAmount(-ROT);
+      if (held.has('ArrowRight')) c.keyTape(ROT);
+      if (held.has('ArrowLeft')) c.keyTape(-ROT);
     };
     const start = () => { if (!timer) timer = setInterval(tick, 16); };
     const stopIfIdle = () => { if (timer && held.size === 0) { clearInterval(timer); timer = null; } };
@@ -1343,11 +1360,12 @@ export default function App() {
       } else if (isArrow(k)) {
         e.preventDefault();
         if (c.guideBlocked) return;
-        // A plain arrow steps the menu highlight once per press. With A held it
-        // must go through the tick instead, so the base layer (hold left + turn
-        // right = volume) keeps working while browsing.
+        // In the menu the vertical axis steps the highlight once per press, and
+        // the tape axis has nothing to do. With A held everything goes through
+        // the tick instead, so the base layer (volume) keeps working here too.
         if (c.menuOpen && !aDown) {
-          if (!e.repeat) c.menuMove(k === 'ArrowDown' || k === 'ArrowRight' ? 1 : -1);
+          const vertical = k === 'ArrowUp' || k === 'ArrowDown';
+          if (vertical && !e.repeat) c.menuMove(k === 'ArrowDown' ? 1 : -1);
           return;
         }
         held.add(k);
@@ -1567,26 +1585,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* Non-interactive hint strip. It covers both contexts, because the deck
-          mode is sticky and would otherwise be invisible on first use. The PLAY
-          text is read from DECK_SPEC.hint, so a new mode can't leave a stale
-          caption here. No nowrap: these lines are longer than the old menu-only
-          one and must be allowed to wrap on a phone. */}
-      <div
-        style={{
-          position: 'absolute', bottom: 18, left: '50%', transform: 'translateX(-50%)',
-          zIndex: 20, pointerEvents: 'none', textAlign: 'center', maxWidth: '92vw',
-          fontFamily: "'Space Mono', monospace", fontSize: 10, letterSpacing: 2,
-          color: '#a08840', textTransform: 'uppercase',
-        }}
-      >
-        {menuOpen
-          ? (isMobile
-              ? 'Turn to browse · tap right = open/play · tap left = back'
-              : 'Turn to browse · S = open/play · A = back · Esc = leave')
-          : `${isMobile ? DECK_SPEC[deckMode].hint.touch : DECK_SPEC[deckMode].hint.keys}`
-            + (isMobile ? ' · hold both = modes' : ' · hold A+S = modes')}
-      </div>
+      {/* No hint strip: the controls are meant to be discovered by playing with
+          the wheels. The Controls card is there for anyone who wants the map. */}
 
       {customizeMode && (
         <CustomizeOverlay
