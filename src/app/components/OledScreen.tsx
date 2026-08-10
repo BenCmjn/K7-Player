@@ -208,6 +208,98 @@ function drawWaveform(ctx: CanvasRenderingContext2D, scrollPx: number) {
   }
 }
 
+// ─── Equalizer ─────────────────────────────────────────────────────────────
+// Geometry lifted from the Figma frame "128-32 EQ".
+//
+// Zero dB sits at the vertical centre and the bars are bidirectional. That is
+// not a style choice: bars growing from the bottom are the visual language of a
+// spectrum analyser — an instrument of measurement, whose bars dance on their
+// own. An equalizer is an instrument of control. It cuts as much as it boosts,
+// and its bars stay where you put them.
+
+const EQ_BANDS = 16;
+const EQ_X0 = 20;        // left edge of band 0's body
+const EQ_PITCH = 5;      // per band (4px body + 1px gutter)
+const EQ_BODY_W = 4;
+const EQ_ZERO_Y = 16;    // 0 dB
+const EQ_SPAN = 12;      // px each way, so ±12 dB is exactly 1 px per dB
+
+// Figma puts the preset column at x=102 in a 26px box, but 04b03's `NIGHT` is
+// 27px wide in caps — the loaded state. The column starts 2px earlier so it
+// fits; the band cursor's right dots stop at x=99, so nothing collides.
+const EQ_PRESET_X = 100;
+const EQ_PRESET_W = 28;
+const EQ_PRESET_H = 7;
+const EQ_PRESET_PITCH = 8;
+
+// A 14×7 miniature of the bell the right wheel is painting: five columns whose
+// heights are the coupling profile. Narrow is one spike, wide is a mound.
+const EQ_BRUSH_PROFILE: readonly (readonly number[])[] = [
+  [0, 0, 7, 0, 0],
+  [0, 4, 7, 4, 0],
+  [2, 5, 7, 5, 2],
+];
+
+function drawBrush(ctx: CanvasRenderingContext2D, x: number, y: number, brush: number) {
+  const profile = EQ_BRUSH_PROFILE[brush] ?? EQ_BRUSH_PROFILE[1];
+  profile.forEach((h, i) => { if (h > 0) ctx.fillRect(x + i * 3, y + 7 - h, 2, h); });
+}
+
+/** Deck-mode banner glyph: a tiny bidirectional EQ in the 24×24 icon slot. */
+const EQ_ICON: readonly Rect[] = [
+  [0, 12, 24, 1],                                             // zero line
+  [2, 6, 3, 6], [8, 13, 3, 6], [14, 4, 3, 8], [20, 13, 3, 3], // four bands
+];
+
+function drawEqScreen(ctx: CanvasRenderingContext2D, e: OledEq, fg: string, bg: string) {
+  // ±12 dB rules. Two dots per band cell, so they read as a scale without
+  // competing with the curve.
+  for (let b = 0; b < EQ_BANDS; b++) {
+    const x = EQ_X0 + b * EQ_PITCH;
+    for (const dx of [0, 2]) {
+      ctx.fillRect(x + dx, EQ_ZERO_Y - EQ_SPAN, 1, 1);
+      ctx.fillRect(x + dx, EQ_ZERO_Y + EQ_SPAN, 1, 1);
+    }
+  }
+
+  // The curve: one 4×1 dash per band, at its gain. At 0 dB they line up into
+  // the baseline, so the zero line needs no drawing of its own. Bypass presses
+  // them all flat — you watch your own EQ disappear, which reads better than
+  // the word "BYPASS" and costs no font.
+  for (let b = 0; b < EQ_BANDS; b++) {
+    const db = e.bypass ? 0 : Math.max(-EQ_SPAN, Math.min(EQ_SPAN, e.bands[b] ?? 0));
+    ctx.fillRect(EQ_X0 + b * EQ_PITCH, EQ_ZERO_Y - Math.round(db), EQ_BODY_W, 1);
+  }
+
+  // Cursor: dotted columns bracketing the selected band. None while the cursor
+  // is down in the presets — the inverted chip is the cursor there.
+  if (e.cursor < EQ_BANDS) {
+    const x = EQ_X0 + e.cursor * EQ_PITCH;
+    for (let y = EQ_ZERO_Y - EQ_SPAN; y <= EQ_ZERO_Y + EQ_SPAN; y += 3) {
+      ctx.fillRect(x - 1, y, 1, 1);
+      ctx.fillRect(x + EQ_BODY_W, y, 1, 1);
+    }
+  }
+
+  drawBrush(ctx, 2, 22, e.brush);
+
+  // Presets. Two independent states: the cursor inverts the chip it is on, and
+  // the preset that is actually loaded — and still untouched — is the one in
+  // full caps. Edit a band and it drops back to lower case.
+  e.presets.forEach((label, i) => {
+    const boxY = 1 + i * EQ_PRESET_PITCH;
+    const hovered = e.cursor === EQ_BANDS + i;
+    if (hovered) {
+      ctx.fillRect(EQ_PRESET_X, boxY, EQ_PRESET_W, EQ_PRESET_H);
+      ctx.fillStyle = bg;
+    }
+    // One row above the chip: glyph bodies sit on rows 1-5 of the 8px cell, so
+    // this centres them and keeps `night`'s descender inside the inverted box.
+    drawText(ctx, EQ_PRESET_X + 1, boxY - 1, e.active === i ? label.toUpperCase() : label, 1);
+    if (hovered) ctx.fillStyle = fg;
+  });
+}
+
 // ─── Canvas host: native 128×32 buffer, scaled crisply via CSS ─────────────
 
 interface OledCanvasProps {
@@ -270,7 +362,8 @@ export type OledScreenMode =
   | 'scrub-bwd'
   | 'scrub-fwd'
   | 'menu'
-  | 'deck-mode';
+  | 'deck-mode'
+  | 'eq';
 
 export interface OledMenu {
   folder: string;   // top caption (e.g. the collection name)
@@ -288,6 +381,19 @@ export interface OledDeck {
   tag: string;    // <=3-char chip kept on the resting Playing screen ('' = none)
 }
 
+/**
+ * The equalizer surface. Unlike every other screen here this one is an editor,
+ * not a readout: it stays up for as long as the deck is in `eq` mode.
+ */
+export interface OledEq {
+  bands: readonly number[];   // 16 gains in dB — the chain's response, not 16 knobs
+  cursor: number;             // one circular list of 20: bands 0-15, then presets
+  brush: number;              // 0 narrow · 1 medium · 2 wide
+  presets: readonly string[]; // 4 labels, lower case
+  active: number;             // the loaded, untouched preset — or -1 once edited
+  bypass: boolean;
+}
+
 export interface OledScreenState {
   mode: OledScreenMode;
   trackName: string;
@@ -299,6 +405,7 @@ export interface OledScreenState {
   marqueeSince: number; // performance.now() when this screen/item appeared (marquee hold)
   menu?: OledMenu;
   deck?: OledDeck;
+  eq?: OledEq;
 }
 
 const INVERTED_MODES: ReadonlySet<OledScreenMode> = new Set([
@@ -436,14 +543,22 @@ export function drawOledScreen(ctx: CanvasRenderingContext2D, s: OledScreenState
 
     case 'deck-mode': {
       // Flashed by the Combo. Same geometry as drawIconScreen, but the icon may
-      // be the drawn scrub arrows rather than a baked ICONS entry.
+      // be drawn here rather than baked into ICONS.
       const d = s.deck ?? { label: 'Deck', icon: 'music', tag: '' };
       if (d.icon === 'scrub-arrows') drawScrubArrows(ctx, ICON_X, ICON_Y, true);
+      else if (d.icon === 'eq-bars') drawRects(ctx, EQ_ICON, ICON_X, ICON_Y);
       else drawIcon(ctx, d.icon, ICON_X, ICON_Y);
       drawText(ctx, TEXT_X, 0, 'mode', 1);
       drawText(ctx, TEXT_X, 7, d.label, 3);
       break;
     }
+
+    case 'eq':
+      drawEqScreen(ctx, s.eq ?? {
+        bands: new Array(16).fill(0), cursor: 0, brush: 1,
+        presets: ['k7', 'bass', 'night', 'flat'], active: 3, bypass: false,
+      }, fg, bg);
+      break;
 
     case 'menu': {
       const m = s.menu ?? { folder: 'Megamix', current: track, next: '' };

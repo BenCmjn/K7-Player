@@ -19,10 +19,11 @@ player). Everything you'd expect from the real device is simulated:
   drawn procedurally so it stays crisp at any zoom, glow‑free, one canvas pixel
   per panel pixel.
 - **Two cassette wheels** used as click‑wheels: the left navigates (and, held,
-  reaches the base controls), the right acts — volume, scrub or speed depending
-  on the deck mode.
+  reaches the base controls), the right acts — volume, scrub, speed or EQ gain
+  depending on the deck mode.
 - A tape‑like **scrub** (with the fast‑forward screech), **speed** control that
-  bends the pitch (chipmunk / slow), **volume**, and an on‑device **song menu**.
+  bends the pitch (chipmunk / slow), **volume**, a 16‑band **equalizer**, and an
+  on‑device **song menu**.
 - Boots to a **Hello** welcome screen with a little animated robot, then drops
   into its file system — just like powering on the real thing.
 
@@ -54,13 +55,18 @@ whose verb depends on the current deck mode.
 | Scrub · seek *(Scrub mode)* | `←` / `→` | Turn the right wheel |
 | Speed · chipmunk / slow *(Speed mode)* | `←` / `→` | Turn the right wheel |
 | Reset speed *(Speed mode)* | `S` | Tap the right wheel |
+| EQ · pick a band or preset *(EQ mode)* | `←` / `→` | Turn the left wheel |
+| EQ · gain of that band *(EQ mode)* | `↑` / `↓` | Turn the right wheel |
+| EQ · brush width, or load the preset *(EQ mode)* | `S` | Tap the right wheel |
+| EQ · hear it bypassed *(EQ mode)* | hold `S` | Hold the right wheel |
 | Volume · play/pause from anywhere | hold `A` + `↑`/`↓` or `S` | Hold left + turn/tap right |
 
 **Deck modes.** Holding both wheels together for a beat cycles
-`base → Scrub → Speed → base`. The mode is sticky — it only changes on the next
-hold — and the resting screen shows a small `SCR` / `SPD` chip so you always
-know which verb the right wheel is carrying. Holding the left wheel always
-reaches the base controls (volume, play/pause), whatever mode you're in.
+`base → Scrub → Speed → EQ → base`. The mode is sticky — it only changes on the
+next hold — and the resting screen shows a small `SCR` / `SPD` chip so you
+always know which verb the right wheel is carrying (EQ needs no chip: it takes
+over the whole screen). Holding the left wheel always reaches the base controls
+(volume, play/pause), whatever mode you're in.
 
 Holding both is the one gesture reserved for advanced switching, precisely
 because two-finger gestures are the least reliable on a phone; everything you
@@ -71,6 +77,26 @@ tracks. Tap the left wheel to climb a level (Hello is the top), the right wheel
 to go deeper or play a track, and long‑press the right wheel to jump straight
 back to what's playing. Re‑selecting the track that's already loaded keeps its
 position instead of restarting.
+
+**The equalizer** is the one mode that takes over the panel. It draws 16 bars
+around a centre zero line (±12 dB, exactly one pixel per dB) and four presets
+down the right edge. Both wheels are in play at once: the left one runs a single
+cursor through **twenty** positions — the 16 bands, then the 4 presets, then
+back round — and the right one sets the gain wherever that cursor is standing.
+The right tap does whatever is under the cursor: cycle the brush width on a
+band, load the preset on a preset. Hold it and you hear the track dry while the
+curve is pressed flat, so you can tell what you actually changed.
+
+A preset reads in lower case until it is the curve you are hearing, at which
+point it goes to full caps; touch any band and it drops back down.
+
+Under the bars is a real filter chain, not sixteen knobs — a low shelf, three
+peaking bells and a high shelf, with the bars drawn from its response. That is
+the ESP32 firmware's architecture, bell budget included: push a fourth
+correction and the nearest bump slides over to meet you. The browser could
+easily afford sixteen independent bands, but then the prototype would stop
+predicting the device. See
+[`src/app/audio/eq.ts`](src/app/audio/eq.ts).
 
 On phones the cassette rotates to fill the screen; on desktop there's a
 real‑size (100 × 65 mm) ruler tool in the top‑right corner.
@@ -120,7 +146,9 @@ node tools/oled-bake/server.mjs   # then open http://localhost:8791 and click "s
 ## Tech stack
 
 React · TypeScript · Vite · Tailwind CSS · shadcn/ui. Audio is a streaming
-`<audio>` element so even hour‑long megamixes stay light on memory.
+`<audio>` element so even hour‑long megamixes stay light on memory. The
+equalizer taps that element into a small Web Audio graph, built lazily the first
+time you reach the EQ mode — so nothing is routed through it unless you ask.
 
 ## Credits
 

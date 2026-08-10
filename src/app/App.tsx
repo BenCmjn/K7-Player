@@ -1,6 +1,10 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { CassetteWheel } from './components/CassetteWheel';
-import { OledCanvas, drawOledScreen, type OledScreenMode, type OledMenu, type OledDeck } from './components/OledScreen';
+import { OledCanvas, drawOledScreen, type OledScreenMode, type OledMenu, type OledDeck, type OledEq } from './components/OledScreen';
+import {
+  BAND_COUNT, BRUSH_COUNT, EQ_PRESETS, FLAT_CHAIN, FLAT_PRESET_INDEX,
+  chainFilters, editBand, isFlat, makeupDb, renderChain, type EqChain,
+} from './audio/eq';
 import svgPaths from '../imports/Cassette/svg-kn4si39m8f';
 import { imgCover } from '../imports/Cassette/svg-58mld';
 import qrNetlify from '../assets/qr-netlify.svg';
@@ -100,6 +104,26 @@ function useAudioEngine() {
   const wasPlayingRef = useRef(false);
   const scrubTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ── Equalizer graph ──────────────────────────────────────────────────────
+  // The one place this project uses Web Audio, and it is built lazily — only
+  // when the deck first reaches the EQ mode. createMediaElementSource is a
+  // one-way door: it may be called once per element, and from then on every
+  // sample travels through the graph. Nobody who never opens the equalizer
+  // pays for that. The streaming element itself is untouched, so playbackRate,
+  // preservesPitch and el.volume (which applies upstream of the tap) all keep
+  // behaving exactly as before.
+  //
+  //   element ─┬─ dry ─────────────────────────────────┐
+  //            └─ low ▸ bell ×N ▸ high ▸ makeup ▸ wet ──┴─ destination
+  //
+  const eqRef = useRef<{
+    ctx: AudioContext;
+    filters: BiquadFilterNode[];
+    makeup: GainNode;
+    dry: GainNode;
+    wet: GainNode;
+  } | null>(null);
+
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackRate, setPlaybackRateState] = useState(1.0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -148,6 +172,9 @@ function useAudioEngine() {
     if (!a || !a.src) return;
     setPreservesPitch(a, false);
     a.playbackRate = rateRef.current;
+    // Once the graph exists the element's audio only reaches the speakers
+    // through it, so a context the browser suspended has to be woken here.
+    void eqRef.current?.ctx.resume();
     void a.play();
   }, []);
 
@@ -172,6 +199,7 @@ function useAudioEngine() {
     // Brief fast playback for the tape-scrub screech
     setPreservesPitch(a, false);
     a.playbackRate = 3.0;
+    void eqRef.current?.ctx.resume();
     void a.play();
     if (scrubTimerRef.current) clearTimeout(scrubTimerRef.current);
     scrubTimerRef.current = setTimeout(() => {
@@ -200,6 +228,73 @@ function useAudioEngine() {
     setVolumeState(v);
   }, []);
 
+  /** Build the EQ graph on first use. Call it from a user gesture. */
+  const ensureEqGraph = useCallback(() => {
+    if (eqRef.current) return eqRef.current;
+    const a = elRef.current;
+    const Ctor: typeof AudioContext | undefined =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!a || !Ctor) return null;
+    try {
+      const ctx = new Ctor();
+      const src = ctx.createMediaElementSource(a);
+      // Five nodes, allocated once and never rewired: a filter at 0 dB is a
+      // pass-through, so an unused slot needs no special case.
+      const filters = chainFilters(FLAT_CHAIN).map((f) => {
+        const n = ctx.createBiquadFilter();
+        n.type = f.type;
+        n.frequency.value = f.f;
+        n.Q.value = f.q;
+        n.gain.value = 0;
+        return n;
+      });
+      const makeup = ctx.createGain();
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      dry.gain.value = 0;
+      wet.gain.value = 1;
+      src.connect(dry).connect(ctx.destination);
+      let node: AudioNode = src;
+      for (const f of filters) node = node.connect(f);
+      node.connect(makeup).connect(wet).connect(ctx.destination);
+      void ctx.resume();
+      eqRef.current = { ctx, filters, makeup, dry, wet };
+      return eqRef.current;
+    } catch {
+      // No Web Audio (or the element is already tapped): the EQ screen still
+      // works, it just doesn't colour the sound. Better than killing playback.
+      return null;
+    }
+  }, []);
+
+  const applyEq = useCallback((chain: EqChain, makeupGainDb: number) => {
+    const g = eqRef.current;
+    if (!g) return;
+    const t = g.ctx.currentTime;
+    // Ramp rather than jump: changing coefficients on the sample clicks. This
+    // is the browser's version of the firmware's "recompute at rest".
+    const ramp = (p: AudioParam, v: number) => p.setTargetAtTime(v, t, 0.01);
+    chainFilters(chain).forEach((f, i) => {
+      const n = g.filters[i];
+      if (!n) return;
+      ramp(n.frequency, f.f);
+      ramp(n.Q, f.q);
+      ramp(n.gain, f.g);
+    });
+    ramp(g.makeup.gain, Math.pow(10, makeupGainDb / 20));
+  }, []);
+
+  const setEqBypass = useCallback((on: boolean) => {
+    const g = eqRef.current;
+    if (!g) return;
+    const t = g.ctx.currentTime;
+    // The filters never stop running. Muting them would freeze their state,
+    // which goes stale and cracks on the way back — so crossfade instead, over
+    // ~6ms, and let the biquads keep chewing through the signal regardless.
+    g.dry.gain.setTargetAtTime(on ? 1 : 0, t, 0.006);
+    g.wet.gain.setTargetAtTime(on ? 0 : 1, t, 0.006);
+  }, []);
+
   const loadUrl = useCallback((url: string, name: string) => {
     const a = elRef.current;
     if (!a) return;
@@ -218,7 +313,7 @@ function useAudioEngine() {
     setIsLoaded(true);
   }, []);
 
-  return { isPlaying, playbackRate, currentTime, duration, trackName, isLoaded, isScrubbing, volume, play, pause, togglePlay, seek, setRate, adjustVolume, loadUrl };
+  return { isPlaying, playbackRate, currentTime, duration, trackName, isLoaded, isScrubbing, volume, play, pause, togglePlay, seek, setRate, adjustVolume, loadUrl, ensureEqGraph, applyEq, setEqBypass };
 }
 
 // ─── Interactive TapeControls (replaces Figma static TapeControls) ─────────
@@ -234,6 +329,7 @@ interface OledProps {
   marqueeSince: number;
   menu?: OledMenu;
   deck?: OledDeck;
+  eq?: OledEq;
 }
 
 interface TapeControlsProps extends OledProps {
@@ -674,46 +770,74 @@ function DimensionLines() {
 // their meaning across modes, except 'speed', which spends its right tap on
 // resetting the rate.
 //
-// Adding a mode (loop, eq…) = one entry in DeckMode + DECK_ORDER and one row
-// here. Only a genuinely new rotation verb also needs a WheelVerb + a case in
-// applyWheel. The OLED banner and the sticky chip both read
-// the row you just added. `left` is 'none' throughout today — that slot is
-// reserved for eq ("left = x axis, right = y axis") and loop.
+// Adding a mode (loop…) = one entry in DeckMode + DECK_ORDER and one row here.
+// Only a genuinely new verb also needs a WheelVerb/TapVerb and a case in
+// applyWheel or the tap handler. The OLED banner and the sticky chip both read
+// the row you just added.
+//
+// `eq` is the first mode to claim the LEFT rotation — the slot this table had
+// been holding open. It is the one screen with two axes: the left wheel runs
+// along the frequency axis, the right one up and down the gain axis.
 //
 // Historical note: the shell is silkscreened SCRUB (left) and SPEED (right).
-// Those printed labels name the two advanced modes, though in this paradigm it
-// is the right wheel that executes both. Artwork deliberately left alone.
+// Those printed labels name two of the advanced modes, though in this paradigm
+// it is the right wheel that executes both. Artwork deliberately left alone.
 
-type DeckMode = 'base' | 'scrub' | 'speed';        // future: | 'loop' | 'eq'
-type WheelVerb = 'none' | 'volume' | 'scrub' | 'speed';
-type TapVerb = 'play-pause' | 'reset-speed';
+type DeckMode = 'base' | 'scrub' | 'speed' | 'eq';   // future: | 'loop'
+type WheelVerb = 'none' | 'volume' | 'scrub' | 'speed' | 'eq-cursor' | 'eq-gain';
+type TapVerb = 'play-pause' | 'reset-speed' | 'eq-context';
 
 interface DeckModeSpec {
   left: WheelVerb;
   right: WheelVerb;
   rightTap: TapVerb;
+  // The keyboard arrows are semantic rather than a literal wheel mirror, so
+  // each mode says what its two axes carry: ↑/↓ is "amount", ←/→ is the axis
+  // that runs along the tape (or, in eq, along the spectrum).
+  keyAmount: WheelVerb;
+  keyTape: WheelVerb;
   label: string;   // big value on the mode banner
-  icon: string;    // ICONS key, or 'scrub-arrows' (drawn, not baked into ICONS)
+  icon: string;    // ICONS key, or a drawn glyph ('scrub-arrows', 'eq-bars')
   tag: string;     // <=3-char chip on the resting Playing screen ('' = none)
 }
 
-const DECK_ORDER: readonly DeckMode[] = ['base', 'scrub', 'speed'];
+const DECK_ORDER: readonly DeckMode[] = ['base', 'scrub', 'speed', 'eq'];
 const COMBO_MS = 200;   // hold both wheels this long to cycle the mode
 
 const DECK_SPEC: Record<DeckMode, DeckModeSpec> = {
   base: {
     left: 'none', right: 'volume', rightTap: 'play-pause',
+    keyAmount: 'volume', keyTape: 'none',
     label: 'Deck', icon: 'music', tag: '',
   },
   scrub: {
     left: 'none', right: 'scrub', rightTap: 'play-pause',
+    keyAmount: 'volume', keyTape: 'scrub',
     label: 'Scrub', icon: 'scrub-arrows', tag: 'SCR',
   },
   speed: {
     left: 'none', right: 'speed', rightTap: 'reset-speed',
+    keyAmount: 'volume', keyTape: 'speed',
     label: 'Speed', icon: 'speed-fast', tag: 'SPD',
   },
+  eq: {
+    left: 'eq-cursor', right: 'eq-gain', rightTap: 'eq-context',
+    keyAmount: 'eq-gain', keyTape: 'eq-cursor',
+    // No chip: eq owns the whole screen, so there is no resting Playing screen
+    // left to caption.
+    label: 'EQ', icon: 'eq-bars', tag: '',
+  },
 };
+
+// ─── Equalizer — interaction constants ─────────────────────────────────────
+// One circular list of 20 positions: the 16 bands, then the 4 presets, then
+// back to band 1. There is no "I am editing" vs "I am in presets" state — a
+// single cursor in a single list is what makes the model immediate.
+const EQ_SLOTS = BAND_COUNT + EQ_PRESETS.length;
+const EQ_CURSOR_STEP = 20;    // degrees of wheel per position (≈1 turn for the loop)
+const EQ_DB_PER_DEG = 0.06;   // ≈1.5 dB per detent, the firmware's step
+const EQ_BYPASS_MS = 400;     // hold the right wheel this long to hear it dry
+const EQ_PRESET_LABELS: readonly string[] = EQ_PRESETS.map((p) => p.label);
 
 // ─── Controls guide (same J-card modal, adapts to keyboard vs touch) ────────
 
@@ -737,6 +861,10 @@ const CONTROL_ROWS: ControlRow[] = [
   { glyph: '↔', action: 'Scrub · seek (Scrub mode)', keys: ['←', '/', '→'], touch: 'Turn the right wheel' },
   { glyph: '≈', action: 'Speed · pitch (Speed mode)', keys: ['←', '/', '→'], touch: 'Turn the right wheel' },
   { glyph: '⟲', action: 'Reset speed (Speed mode)', keys: ['S'], touch: 'Tap the right wheel' },
+  { glyph: '⇄', action: 'EQ · pick a band or a preset (EQ mode)', keys: ['←', '/', '→'], touch: 'Turn the left wheel' },
+  { glyph: '⇕', action: 'EQ · gain of that band (EQ mode)', keys: ['↑', '/', '↓'], touch: 'Turn the right wheel' },
+  { glyph: '✻', action: 'EQ · brush width, or load the preset (EQ mode)', keys: ['S'], touch: 'Tap the right wheel' },
+  { glyph: '⊘', action: 'EQ · hear it bypassed (EQ mode)', keys: ['hold', 'S'], touch: 'Hold the right wheel' },
   { glyph: '⇧', action: 'Volume · play/pause anywhere', keys: ['hold', 'A', '+', '↑↓', '/', 'S'], touch: 'Hold left + turn/tap right' },
 ];
 
@@ -939,6 +1067,20 @@ export default function App() {
   // Sticky deck mode — only the Combo changes it, never a timer. See DECK_SPEC.
   const [deckMode, setDeckMode] = useState<DeckMode>('base');
 
+  // ── Equalizer ────────────────────────────────────────────────────────────
+  // The filter chain is the state; the 16 bars are its response. See
+  // audio/eq.ts for why the prototype keeps the firmware's bell budget.
+  const [eqChain, setEqChain] = useState<EqChain>(FLAT_CHAIN);
+  const [eqCursor, setEqCursor] = useState(0);
+  const [eqBrush, setEqBrush] = useState(1);                   // medium
+  const [eqPreset, setEqPreset] = useState(FLAT_PRESET_INDEX); // -1 once edited by hand
+  const [eqBypass, setEqBypass] = useState(false);
+  // A pointer can move several times between renders, so the chain advances on
+  // a ref and the state follows — reading it back from the closure would drop
+  // every edit that lands inside a single frame.
+  const eqChainRef = useRef<EqChain>(FLAT_CHAIN);
+  const eqCursorAccRef = useRef(0); // leftover degrees between cursor steps
+
   // Keyboard-driven "pressed" visuals + transient volume HUD
   const [leftPressed, setLeftPressed] = useState(false);
   const [rightPressed, setRightPressed] = useState(false);
@@ -1132,6 +1274,68 @@ export default function App() {
     }
   }, [moveMenu]);
 
+  // ── Equalizer actions ────────────────────────────────────────────────────
+  // The bars the screen draws: the chain's response, recomputed only when the
+  // chain itself moves.
+  const eqBands = useMemo(() => renderChain(eqChain), [eqChain]);
+  const eqMakeup = useMemo(() => makeupDb(eqBands), [eqBands]);
+
+  // Reaching the EQ for the first time is what builds the Web Audio graph —
+  // always off the back of a Combo, so always inside a user gesture.
+  useEffect(() => {
+    if (deckMode === 'eq') audio.ensureEqGraph();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deckMode]);
+  useEffect(() => {
+    audio.applyEq(eqChain, eqMakeup);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eqChain, eqMakeup]);
+  useEffect(() => {
+    audio.setEqBypass(eqBypass);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eqBypass]);
+
+  /** Left rotation: the cursor, through all 20 positions, wrapping. */
+  const eqMoveCursor = useCallback((delta: number) => {
+    eqCursorAccRef.current += delta;
+    while (Math.abs(eqCursorAccRef.current) >= EQ_CURSOR_STEP) {
+      const dir = Math.sign(eqCursorAccRef.current);
+      eqCursorAccRef.current -= dir * EQ_CURSOR_STEP;
+      setEqCursor((c) => (c + dir + EQ_SLOTS) % EQ_SLOTS);
+    }
+  }, []);
+
+  /** Right rotation: the gain under the cursor. Presets take no gain. */
+  const eqAdjustGain = useCallback((delta: number) => {
+    if (eqCursor >= BAND_COUNT) return;
+    const next = editBand(eqChainRef.current, eqCursor, delta * EQ_DB_PER_DEG, eqBrush);
+    eqChainRef.current = next;
+    setEqChain(next);
+    // Touching the curve breaks it away from whatever preset was loaded, which
+    // is what drops the label back to lower case. Land back on dead flat and
+    // it is FLAT again, honestly.
+    setEqPreset(isFlat(next) ? FLAT_PRESET_INDEX : -1);
+  }, [eqCursor, eqBrush]);
+
+  /**
+   * Right tap: run whatever the cursor is over — the brush width on a band, the
+   * preset on a preset. One rule covering both contexts, nothing to remember.
+   *
+   * Loading a preset overwrites any manual curve outright, with no confirmation
+   * step: a deliberate call, on the grounds that the case-change is signal
+   * enough and FLAT is always one click away.
+   */
+  const eqContextTap = useCallback(() => {
+    if (eqCursor < BAND_COUNT) {
+      setEqBrush((b) => (b + 1) % BRUSH_COUNT);
+      return;
+    }
+    const i = eqCursor - BAND_COUNT;
+    eqChainRef.current = EQ_PRESETS[i].chain;
+    setEqChain(EQ_PRESETS[i].chain);
+    setEqPreset(i);
+  }, [eqCursor]);
+
   // The only path from a wheel to the audio engine. DECK_SPEC says which verb a
   // wheel carries in the current mode; this says what each verb does.
   const applyWheel = useCallback((verb: WheelVerb, delta: number) => {
@@ -1150,17 +1354,25 @@ export default function App() {
         triggerTransient(Math.abs(next - 1) < 0.03 ? 'normal-speed' : next > 1 ? 'chipmunk' : 'slow');
         break;
       }
+      // The EQ screen is its own feedback — it stays up for as long as the mode
+      // does — so these two deliberately flash nothing over it.
+      case 'eq-cursor':
+        eqMoveCursor(delta);
+        break;
+      case 'eq-gain':
+        eqAdjustGain(delta);
+        break;
       case 'none':
         break;
     }
-  }, [audio, triggerTransient]);
+  }, [audio, triggerTransient, eqMoveCursor, eqAdjustGain]);
 
   // The reel always spins with the finger, in every context — only what that
   // rotation *does* changes.
   const handleLeftRotate = useCallback((delta: number) => {
     setLeftAngle(a => a + delta);
     if (menuOpen) { scrollMenu(delta); return; }
-    applyWheel(DECK_SPEC[deckMode].left, delta); // 'none' in every mode today
+    applyWheel(DECK_SPEC[deckMode].left, delta); // idle outside eq
   }, [menuOpen, scrollMenu, applyWheel, deckMode]);
 
   const handleRightRotate = useCallback((delta: number) => {
@@ -1181,10 +1393,9 @@ export default function App() {
   // ── Keyboard axes ─────────────────────────────────────────────────────────
   // The arrows are SEMANTIC rather than a literal wheel mirror, because that is
   // what reads naturally on a keyboard: up/down is the "amount" axis (volume,
-  // and the highlight in a vertical menu), left/right is the tape axis (shuttle
-  // and rate, which run along a horizontal tape). The device itself is
-  // unchanged — both verbs still live on the right wheel — so both axes spin
-  // the right reel.
+  // and the highlight in a vertical menu), left/right is the axis that runs
+  // horizontally on screen (the tape, for shuttle and rate; the spectrum, in
+  // eq). Each mode names its two axes in DECK_SPEC.
   const keyAmount = useCallback((delta: number) => {
     setRightAngle(a => a + delta);
     if (leftHeld) { // base layer: volume, even while browsing
@@ -1194,17 +1405,20 @@ export default function App() {
       return;
     }
     if (menuOpen) { scrollMenu(delta); return; }
-    applyWheel('volume', delta); // volume in every deck mode, no modifier needed
-  }, [leftHeld, cancelCombo, menuOpen, scrollMenu, applyWheel]);
+    applyWheel(DECK_SPEC[deckMode].keyAmount, delta); // volume, except in eq
+  }, [leftHeld, cancelCombo, menuOpen, scrollMenu, applyWheel, deckMode]);
 
   const keyTape = useCallback((delta: number) => {
     if (leftHeld) { cancelCombo(); return; } // not a defined gesture
     if (menuOpen) return;                    // nothing to shuttle while browsing
-    setRightAngle(a => a + delta);
     // In base the right wheel's verb IS volume, which belongs to the other
-    // axis — so this axis is idle until a mode puts something on it.
-    const verb = DECK_SPEC[deckMode].right;
-    applyWheel(verb === 'volume' ? 'none' : verb, delta);
+    // axis — so this axis is idle until a mode puts something on it. Spin
+    // whichever reel actually carries the verb on the device: the right one,
+    // except in eq, where picking a band is the left wheel's job.
+    const verb = DECK_SPEC[deckMode].keyTape;
+    if (verb !== 'none' && verb === DECK_SPEC[deckMode].left) setLeftAngle(a => a + delta);
+    else setRightAngle(a => a + delta);
+    applyWheel(verb, delta);
   }, [leftHeld, cancelCombo, menuOpen, applyWheel, deckMode]);
 
   // ── Combo ────────────────────────────────────────────────────────────────
@@ -1256,6 +1470,28 @@ export default function App() {
     };
   }, [rightHeld, leftHeld, menuOpen]);
 
+  // Long-press the right wheel on the EQ screen → momentary bypass: the track
+  // plays dry for as long as you hold, and the curve is pressed flat onto the
+  // zero line so you watch your own EQ disappear.
+  //
+  // Momentary rather than a toggle, on purpose. The ear recalibrates in ten or
+  // twenty seconds; without a fixed reference everyone drifts into an absurd
+  // curve convinced they have stayed neutral. A gesture you cannot leave
+  // switched on is what makes the comparison quick and repeatable.
+  //
+  // Same guard as the menu long-press (left up), so it can never race the Combo.
+  useEffect(() => {
+    if (!(rightHeld && !leftHeld && !menuOpen && deckMode === 'eq')) {
+      setEqBypass(false);
+      return;
+    }
+    const id = setTimeout(() => {
+      setEqBypass(true);
+      suppressRightClickRef.current = true; // this press was a hold, not a tap
+    }, EQ_BYPASS_MS);
+    return () => clearTimeout(id);
+  }, [rightHeld, leftHeld, menuOpen, deckMode]);
+
   // A tap is swallowed while a two-wheel gesture is still in flight, or when the
   // Combo / base layer already spent it. Each wheel also clears its own flag on
   // its next press (see handleLeftHoldChange), so a flag can never go stale and
@@ -1284,13 +1520,19 @@ export default function App() {
       return;
     }
     if (menuOpen) { menuEnter(); return; } // enter folder / play track
-    if (DECK_SPEC[deckMode].rightTap === 'reset-speed') {
-      audio.setRate(1.0);
-      triggerTransient('normal-speed');
-      return;
+    switch (DECK_SPEC[deckMode].rightTap) {
+      case 'reset-speed':
+        audio.setRate(1.0);
+        triggerTransient('normal-speed');
+        break;
+      case 'eq-context':
+        eqContextTap();
+        break;
+      case 'play-pause':
+        togglePlayPause();
+        break;
     }
-    togglePlayPause();
-  }, [consumeTap, leftHeld, cancelCombo, togglePlayPause, menuOpen, menuEnter, deckMode, audio, triggerTransient]);
+  }, [consumeTap, leftHeld, cancelCombo, togglePlayPause, menuOpen, menuEnter, deckMode, audio, triggerTransient, eqContextTap]);
 
   // Latest callbacks, read by the (mounted-once) keyboard listener. There is no
   // typecheck in this project, so a key added to the effect but forgotten here
@@ -1441,11 +1683,25 @@ export default function App() {
       next: tracks[menuTrackIndex + 1]?.name ?? '',
     };
   })();
+  // The equalizer is an editor, not a readout: it holds the screen for as long
+  // as the mode does, in place of the resting Playing screen.
+  const oledEq: OledEq | undefined = deckMode === 'eq' ? {
+    bands: eqBands,
+    cursor: eqCursor,
+    brush: eqBrush,
+    presets: EQ_PRESET_LABELS,
+    active: eqPreset,
+    bypass: eqBypass,
+  } : undefined;
+
   // Transient feedback wins (so volume/play flash even while in the menu, then
   // hand back); then the open menu — Hello at the root, the browser below it;
-  // otherwise the resting Playing screen (playing-vs-paused).
+  // otherwise the deck's own screen: the equalizer in eq mode, and the resting
+  // Playing screen (playing-vs-paused) everywhere else.
   const oledMode: OledScreenMode =
-    transientMode ?? (menuOpen ? (menuLevel === 'root' ? 'hello' : 'menu') : 'playing');
+    transientMode ?? (menuOpen
+      ? (menuLevel === 'root' ? 'hello' : 'menu')
+      : (deckMode === 'eq' ? 'eq' : 'playing'));
 
   // Reset the marquee's start-hold whenever the visible screen or the
   // highlighted menu item changes, so every fresh screen shows the title's
@@ -1588,6 +1844,7 @@ export default function App() {
             marqueeSince={marqueeSinceRef.current}
             menu={oledMenu}
             deck={DECK_SPEC[deckMode]}
+            eq={oledEq}
             reveal={plastic.reveal}
           />
         </div>
